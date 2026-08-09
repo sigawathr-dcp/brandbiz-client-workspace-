@@ -1,0 +1,238 @@
+/* ============================================================
+ * Design Tokens — Decomplica AI Gateway
+ * Matches the reference prototype (theme.css, June 2026).
+ * Back-compat aliases at the bottom keep old token names working.
+ * ============================================================ */
+
+:root {
+  /* Accent */
+  --accent:        #4f46e5;
+  --accent-weak:   color-mix(in oklab, var(--accent) 12%, transparent);
+  --accent-ink:    #ffffff;
+
+  /* Backgrounds */
+  --bg:            #f6f7f9;
+  --surface:       #ffffff;
+  --surface-2:     #f0f2f5;
+  --surface-sunk:  #eceef2;
+
+  /* Text / Ink scale */
+  --ink:           #16181d;
+  --ink-2:         #494e57;
+  --ink-3:         #7c828c;
+  --ink-4:         #a8adb6;
+
+  /* Borders / Lines */
+  --line:          #e4e7ec;
+  --line-2:        #d6dae1;
+
+  /* Tier palette */
+  --t1:    #16a34a;  --t1-bg: color-mix(in oklab, #16a34a 12%, transparent);
+  --t2:    #ca8a04;  --t2-bg: color-mix(in oklab, #ca8a04 13%, transparent);
+  --t3:    #ea580c;  --t3-bg: color-mix(in oklab, #ea580c 13%, transparent);
+  --t4:    #dc2626;  --t4-bg: color-mix(in oklab, #dc2626 13%, transparent);
+
+  /* Radii */
+  --r-sm:  7px;
+  --r-md:  11px;
+  --r-lg:  16px;
+  --r-xl:  22px;
+
+  /* Shadows */
+  --shadow-1: 0 1px 2px rgba(16,18,23,.05), 0 1px 1px rgba(16,18,23,.04);
+  --shadow-2: 0 4px 14px rgba(16,18,23,.08), 0 1px 3px rgba(16,18,23,.05);
+  --shadow-3: 0 18px 50px rgba(16,18,23,.18), 0 4px 12px rgba(16,18,23,.10);
+
+  /* Typography */
+  --font-sans:    'IBM Plex Sans', 'IBM Plex Sans Thai', system-ui, sans-serif;
+  --font-mono:    'IBM Plex Mono', ui-monospace, monospace;
+  --fs:            15px;
+  --row-pad:       22px;
+
+  /* Layout */
+  --sidebar-w:     278px;
+
+  /* Status (used by admin/consent components) */
+  --success:       #16a34a;
+  --success-bg:    color-mix(in oklab, #16a34a 10%, transparent);
+  --warning:       #ca8a04;
+  --warning-bg:    color-mix(in oklab, #ca8a04 10%, transparent);
+  --danger:        #dc2626;
+  --danger-bg:     color-mix(in oklab, #dc2626 10%, transparent);
+  --info:          #0284c7;
+  --info-bg:       color-mix(in oklab, #0284c7 10%, transparent);
+
+  /* ── Back-compat aliases — old component token names ── */
+  --bg-subtle:     var(--surface-2);
+  --text:          var(--ink);
+  --text-2:        var(--ink-2);
+  --muted:         var(--ink-3);
+  --border:        var(--line);
+  --border-2:      var(--line-2);
+  --accent-subtle: var(--accent-weak);
+  --accent-hover:  color-mix(in oklab, var(--accent) 82%, #000);
+  --radius-xs:     4px;
+  --radius-sm:     var(--r-sm);
+  --radius:        var(--r-md);
+  --radius-lg:     var(--r-lg);
+  --radius-xl:     var(--r-xl);
+  --radius-full:   9999px;
+  --shadow-sm:     var(--shadow-1);
+  --shadow:        var(--shadow-2);
+  --shadow-lg:     var(--shadow-3);
+  --shadow-xl:     var(--shadow-3);
+  /* Tier border aliases (used by existing admin components) */
+  --t1-border:     var(--t1);
+  --t2-border:     var(--t2);
+  --t3-border:     var(--t3);
+  --t4-border:     var(--t4);
+}
+
+[data-theme="dark"] {
+  --bg:            #0d0f13;
+  --surface:       #15181e;
+  --surface-2:     #1b1f27;
+  --surface-sunk:  #0f1217;
+  --ink:           #eef0f4;
+  --ink-2:         #b9bfc9;
+  --ink-3:         #858c98;
+  --ink-4:         #5b626d;
+  --line:          #262b34;
+  --line-2:        #323845;
+  --accent-weak:   color-mix(in oklab, var(--accent) 24%, transparent);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 6px 18px rgba(0,0,0,.45);
+  --shadow-3: 0 24px 60px rgba(0,0,0,.6);
+  --t1-bg: color-mix(in oklab, #16a34a 22%, transparent);
+  --t2-bg: color-mix(in oklab, #ca8a04 22%, transparent);
+  --t3-bg: color-mix(in oklab, #ea580c 22%, transparent);
+  --t4-bg: color-mix(in oklab, #dc2626 24%, transparent);
+  --success-bg:    color-mix(in oklab, #16a34a 18%, transparent);
+  --warning-bg:    color-mix(in oklab, #ca8a04 18%, transparent);
+  --danger-bg:     color-mix(in oklab, #dc2626 18%, transparent);
+  --info-bg:       color-mix(in oklab, #0284c7 18%, transparent);
+}
+
+/* ---- Reset ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 14px; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.primary  { background: var(--accent);  color: #fff; }
+button.primary:hover { background: var(--accent-hover); }
+button.danger   { background: var(--danger);  color: #fff; }
+button.danger:hover  { background: color-mix(in oklab, var(--danger) 80%, #000); }
+button.ghost    { background: transparent; color: var(--ink-3); border: 1px solid var(--line); }
+button.ghost:hover   { color: var(--ink); border-color: var(--line-2); }
+
+input, select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+input:focus, select:focus { border-color: var(--accent); }
+
+textarea { font-family: inherit; font-size: inherit; }
+
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left;
+  color: var(--ink-4);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+td { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+tr:hover td { background: var(--surface-2); }
+
+/* Role / status badges */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-l1    { background: var(--surface-2);       color: var(--ink-3); }
+.badge-l2    { background: var(--t2-bg);           color: var(--t2); }
+.badge-l3    { background: var(--success-bg);      color: var(--success); }
+.badge-l4    { background: var(--t3-bg);           color: var(--t3); }
+.badge-l5    { background: #fdf2f8;                color: #db2777; }
+.badge-l6    { background: #f5f3ff;                color: #7c3aed; }
+.badge-admin { background: var(--danger-bg);       color: var(--danger); }
+.badge-active   { background: var(--success-bg);   color: var(--success); }
+.badge-inactive { background: var(--surface-2);    color: var(--ink-3); }
+
+[data-theme="dark"] .badge-l5    { background: #3b1f2b; color: #f472b6; }
+[data-theme="dark"] .badge-l6    { background: #2d1b4e; color: #a78bfa; }
+
+/* ---- Scrollbar ---- */
+*::-webkit-scrollbar { width: 11px; height: 11px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-4);
+  background-clip: padding-box;
+}
+
+/* ---- Keyframes ---- */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .25; }
+}
+@keyframes popIn {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes barStripe {
+  from { background-position: 0 0; }
+  to   { background-position: 28px 0; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

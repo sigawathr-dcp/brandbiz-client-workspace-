@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "note": "Synthetic personas for the case-match eval harness (backend/scripts/eval_case_match_*.py). NEVER generated from real ClientProfile rows — those are AES-256-GCM encrypted client PII (see app/routers/client.py::_decrypt_fields). Field values are validated against app/services/client_intake.py's INTAKE_SCRIPT chip values by app/eval/goldens.py::load_profiles(), unless the field is listed in free_text_fields.",
+  "profiles": [
+    {
+      "id": "P01-cafe-expand",
+      "label_th": "คาเฟ่ที่กำลังจะขยายสาขา",
+      "note": "The spine profile every P01* contrast pair below varies from in exactly one field.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Food & beverage / café",
+        "stage": "Growing, ready to expand",
+        "audience": "Urban working adults",
+        "challenge": "Low brand awareness",
+        "goal": "Grow sales / expand",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P02-retail-online",
+      "label_th": "ร้านค้าปลีกที่เพิ่งเปิดขายออนไลน์",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Retail + online",
+        "stage": "Under 1 year old",
+        "audience": "Students",
+        "challenge": "Online channels underperforming",
+        "goal": "Build brand awareness",
+        "horizon": "3 months",
+        "budget": "Under ฿300,000",
+        "history": "None"
+      }
+    },
+    {
+      "id": "P03-b2b-services",
+      "label_th": "ธุรกิจบริการ B2B ยอดนิ่ง",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Services / B2B",
+        "stage": "Established, flat revenue",
+        "audience": "Business customers (B2B)",
+        "challenge": "Hard to differentiate from competitors",
+        "goal": "Full brand refresh",
+        "horizon": "12 months",
+        "budget": "฿800,000 - 1,200,000",
+        "history": "In-house team"
+      }
+    },
+    {
+      "id": "P04-beauty-wellness",
+      "label_th": "แบรนด์ความงามที่กำลังจะออกสินค้าใหม่",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Beauty / health & wellness",
+        "stage": "Growing, ready to expand",
+        "audience": "Families & neighbourhood",
+        "challenge": "Thin margins",
+        "goal": "Launch a new product / service",
+        "horizon": "6 months",
+        "budget": "฿1,200,000+",
+        "history": "Worked with an agency before"
+      }
+    },
+    {
+      "id": "P05-tourism-hotel",
+      "label_th": "โรงแรมที่ยังไม่เปิดตัว",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Tourism / hospitality",
+        "stage": "Pre-launch",
+        "audience": "Tourists / foreigners",
+        "challenge": "Low brand awareness",
+        "goal": "Build brand awareness",
+        "horizon": "3 months",
+        "budget": "Not sure - needs guidance",
+        "history": "None"
+      }
+    },
+    {
+      "id": "P06-other-chip-literal",
+      "label_th": "เลือกชิป \"อื่น ๆ\" โดยไม่มีข้อความเพิ่มเติม",
+      "note": "Deliberate edge case: the intake UI's 'Other (typed)' chip is meant to be followed by free text, but this profile stores the literal chip value with none — testing what the query/retrieval does with a non-informative industry token (\"Business: Other (typed)\"). Compare against the P11-P13 free-text profiles, which supply real Thai text instead.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Other (typed)",
+        "stage": "Growing, ready to expand",
+        "audience": "Urban working adults",
+        "challenge": "Flat / slow sales growth",
+        "goal": "Grow sales / expand",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P01b-goal-differs",
+      "label_th": "เหมือน P01 แต่เป้าหมายต่างกัน",
+      "note": "Contrast pair vs P01 — differs ONLY in goal. Used for the Kendall-tau sensitivity check: if the ranking barely moves, the 'goal' question isn't earning its place in the funnel.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Food & beverage / café",
+        "stage": "Growing, ready to expand",
+        "audience": "Urban working adults",
+        "challenge": "Low brand awareness",
+        "goal": "Build brand awareness",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P01c-challenge-differs",
+      "label_th": "เหมือน P01 แต่ปัญหาต่างกัน",
+      "note": "Contrast pair vs P01 — differs ONLY in challenge.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Food & beverage / café",
+        "stage": "Growing, ready to expand",
+        "audience": "Urban working adults",
+        "challenge": "Hard to differentiate from competitors",
+        "goal": "Grow sales / expand",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P01d-budget-differs",
+      "label_th": "เหมือน P01 แต่งบต่างกัน",
+      "note": "Contrast pair vs P01 — differs ONLY in budget.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Food & beverage / café",
+        "stage": "Growing, ready to expand",
+        "audience": "Urban working adults",
+        "challenge": "Low brand awareness",
+        "goal": "Grow sales / expand",
+        "horizon": "6 months",
+        "budget": "฿1,200,000+",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P01e-stage-differs",
+      "label_th": "เหมือน P01 แต่ระยะธุรกิจต่างกัน",
+      "note": "Contrast pair vs P01 — differs ONLY in stage.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Food & beverage / café",
+        "stage": "Pre-launch",
+        "audience": "Urban working adults",
+        "challenge": "Low brand awareness",
+        "goal": "Grow sales / expand",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P01f-audience-differs",
+      "label_th": "เหมือน P01 แต่กลุ่มลูกค้าต่างกัน",
+      "note": "Contrast pair vs P01 — differs ONLY in audience.",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Food & beverage / café",
+        "stage": "Growing, ready to expand",
+        "audience": "Business customers (B2B)",
+        "challenge": "Low brand awareness",
+        "goal": "Grow sales / expand",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "One freelance logo project"
+      }
+    },
+    {
+      "id": "P11-freetext-cosmetics",
+      "label_th": "ร้านขายเครื่องสำอางออนไลน์ (พิมพ์เอง)",
+      "note": "Tests the free-text intake path with real Thai prose, plus the largest untested assumption in the product: the query is built from English chip labels/values, but the corpus narrative is Thai.",
+      "free_text_fields": ["industry"],
+      "fields": {
+        "industry": "ร้านขายเครื่องสำอางออนไลน์ อยากทำแบรนด์ให้ดูพรีเมียม",
+        "stage": "Growing, ready to expand",
+        "audience": "Urban working adults",
+        "challenge": "Hard to differentiate from competitors",
+        "goal": "Full brand refresh",
+        "horizon": "6 months",
+        "budget": "฿300,000 - 800,000",
+        "history": "None"
+      }
+    },
+    {
+      "id": "P12-freetext-tech-services",
+      "label_th": "บริษัทรับทำเว็บ/แอปสำหรับ SME (พิมพ์เอง)",
+      "note": "Free-text industry, B2B services flavour distinct from the P03 chip-based profile.",
+      "free_text_fields": ["industry"],
+      "fields": {
+        "industry": "บริษัทรับทำเว็บไซต์และแอพพลิเคชันสำหรับธุรกิจ SME",
+        "stage": "Established, flat revenue",
+        "audience": "Business customers (B2B)",
+        "challenge": "Flat / slow sales growth",
+        "goal": "Grow sales / expand",
+        "horizon": "12 months",
+        "budget": "Not sure - needs guidance",
+        "history": "In-house team"
+      }
+    },
+    {
+      "id": "P13-freetext-fitness",
+      "label_th": "สตูดิโอโยคะสำหรับผู้หญิงวัยทำงาน (พิมพ์เอง)",
+      "note": "Free-text industry, new-business flavour distinct from the P05 chip-based profile.",
+      "free_text_fields": ["industry"],
+      "fields": {
+        "industry": "สตูดิโอโยคะและฟิตเนสสำหรับผู้หญิงวัยทำงาน",
+        "stage": "Under 1 year old",
+        "audience": "Urban working adults",
+        "challenge": "Low brand awareness",
+        "goal": "Build brand awareness",
+        "horizon": "3 months",
+        "budget": "Under ฿300,000",
+        "history": "None"
+      }
+    }
+  ]
+}

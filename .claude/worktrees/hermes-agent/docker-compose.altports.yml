@@ -1,0 +1,13 @@
+# Temporary override: remap host ports to avoid collision with a second local
+# checkout (amarin-ai-gateway, the pre-rebrand copy) that still publishes
+# 8000/3000. Container-to-container traffic (BACKEND_URL=http://backend-api:8000)
+# is unaffected — only the host-side ports change.
+services:
+  backend-api:
+    ports: !override
+      - "8001:8000"
+  frontend-chat:
+    ports: !override
+      - "3001:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8001

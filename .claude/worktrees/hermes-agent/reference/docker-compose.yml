@@ -1,0 +1,242 @@
+version: '3.9'
+
+# =============================================================================
+# Company AI Gateway - Docker Compose
+# Preserves ALL services from the original architecture diagram:
+#   Redis (dual role: app cache + Celery broker)
+#   Garage (S3-compatible object storage)
+#   llama.cpp x2 (primary chat + embed-server)
+#   3 decoupled RAG workers (chunking, embedding, dbwriter)
+#   Postgres + pgvector
+# Plus new layers: policy engine, audit logger, admin panel, separate UIs.
+# =============================================================================
+
+x-common-env: &common-env
+  # Database
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: aigateway
+  POSTGRES_USER: aigateway
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+
+  # Redis dual-role: DB 0 = app cache, DB 1 = Celery broker, DB 2 = result backend
+  REDIS_CACHE_URL: redis://redis:6379/0
+  REDIS_BROKER_URL: redis://redis:6379/1
+  REDIS_RESULT_URL: redis://redis:6379/2
+
+  # Garage S3
+  S3_ENDPOINT: http://garage:3900
+  S3_ACCESS_KEY: ${GARAGE_ACCESS_KEY:?required}
+  S3_SECRET_KEY: ${GARAGE_SECRET_KEY:?required}
+  S3_BUCKET: aigateway-files
+  S3_REGION: garage
+
+  # Crypto + Auth
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}       # 32 bytes base64
+  ENCRYPTION_KEY_VERSION: "1"
+  JWT_SECRET: ${JWT_SECRET:?required}
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?required}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?required}
+  GOOGLE_WORKSPACE_DOMAIN: ${GOOGLE_WORKSPACE_DOMAIN:?required}
+
+  # LLM endpoints
+  LLM_PRIMARY_URL: http://llamacpp-primary:8080
+  LLM_EMBED_URL:   http://llamacpp-embed:8081
+
+  # External APIs (set in .env)
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY:    ${OPENAI_API_KEY:-}
+  GOOGLE_API_KEY:    ${GOOGLE_API_KEY:-}
+  PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-}
+
+services:
+  # ===========================================================================
+  # Edge: reverse proxy with TLS termination
+  # ===========================================================================
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    depends_on: [frontend-chat, frontend-admin, backend-api]
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Frontends (two separate Next.js apps)
+  # ===========================================================================
+  frontend-chat:
+    build: ./frontend-chat
+    environment:
+      NEXT_PUBLIC_API_URL: https://chat.company.local
+    networks: [edge]
+    restart: unless-stopped
+
+  frontend-admin:
+    build: ./frontend-admin
+    environment:
+      NEXT_PUBLIC_API_URL: https://admin.company.local
+    networks: [edge]
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Backend API + Agent Orchestrator (FastAPI, async)
+  # ===========================================================================
+  backend-api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    environment: *common-env
+    networks: [edge, internal]
+    depends_on:
+      postgres:    { condition: service_healthy }
+      redis:       { condition: service_healthy }
+      garage:      { condition: service_started }
+      llamacpp-primary: { condition: service_started }
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Local LLM Serving (GPU)
+  # ===========================================================================
+  llamacpp-primary:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    command: >
+      --model /models/qwen2.5-14b-instruct-q5_k_m.gguf
+      --host 0.0.0.0 --port 8080
+      --ctx-size 32768
+      --n-gpu-layers 99
+      --parallel 4
+      --cont-batching
+      --metrics
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - { driver: nvidia, count: 1, capabilities: [gpu] }
+    networks: [internal]
+    restart: unless-stopped
+
+  llamacpp-embed:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    command: >
+      --model /models/bge-m3-q8_0.gguf
+      --host 0.0.0.0 --port 8081
+      --embedding
+      --ctx-size 8192
+      --n-gpu-layers 99
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - { driver: nvidia, count: 1, capabilities: [gpu] }
+    networks: [internal]
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Storage Layer
+  # ===========================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aigateway
+      POSTGRES_USER: aigateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aigateway"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    restart: unless-stopped
+
+  garage:
+    image: dxflrs/garage:v1.0.1
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    networks: [internal]
+    restart: unless-stopped
+
+  # ===========================================================================
+  # RAG Workers (decoupled, each scales independently per original diagram)
+  # ===========================================================================
+  worker-chunking:
+    build: ./backend
+    command: celery -A app.workers worker -Q chunking -c 2 -n chunking@%h
+    environment: *common-env
+    networks: [internal]
+    depends_on: [redis, postgres]
+    restart: unless-stopped
+
+  worker-embedding:
+    build: ./backend
+    command: celery -A app.workers worker -Q embedding -c 4 -n embedding@%h
+    environment: *common-env
+    networks: [internal]
+    depends_on: [redis, llamacpp-embed]
+    restart: unless-stopped
+
+  worker-dbwriter:
+    build: ./backend
+    command: celery -A app.workers worker -Q dbwriter -c 2 -n dbwriter@%h
+    environment: *common-env
+    networks: [internal]
+    depends_on: [redis, postgres]
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Async helpers: audit log writer + retention cron + reveal notifications
+  # ===========================================================================
+  worker-audit:
+    build: ./backend
+    command: celery -A app.workers worker -Q audit -c 2 -n audit@%h
+    environment: *common-env
+    networks: [internal]
+    depends_on: [redis, postgres]
+    restart: unless-stopped
+
+  worker-beat:
+    build: ./backend
+    command: celery -A app.workers beat
+    environment: *common-env
+    networks: [internal]
+    depends_on: [redis, postgres]
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  garage_meta:
+  garage_data:
+  caddy_data:
+  caddy_config:

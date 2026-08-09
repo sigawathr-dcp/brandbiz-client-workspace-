@@ -1,0 +1,5 @@
+# Temporary override: drop host port publishing for frontend (reached via Caddy
+# on the internal network). Avoids host port conflicts with other projects.
+services:
+  frontend-chat:
+    ports: !reset []

@@ -1,0 +1,128 @@
+"""Regression test for the personal/org knowledge-base scope leak.
+
+Bug: when an AI Agent's attached knowledge files were passed to
+rag_search.retrieve() as ``file_ids``, the personal/org access rule (R4)
+was skipped entirely — any file ID in the list was retrievable regardless
+of ownership or scope. A personal file attached to a public agent could
+then be read by any user chatting with that agent.
+
+Fix: file_ids narrows the corpus, it must never replace the R4 scope
+filter — the two are ANDed together in rag_search._scope_filter().
+"""
+from __future__ import annotations
+
+import uuid
+from unittest.mock import MagicMock
+
+from app.models.user import User
+from app.tools.rag_search import _scope_filter, retrieve
+
+
+def _make_user(workspace_id: uuid.UUID | None = None) -> User:
+    user = MagicMock(spec=User)
+    user.id = uuid.uuid4()
+    user.workspace_id = workspace_id  # None = internal user — D21/D22
+    return user
+
+
+class TestScopeFilter:
+    def test_file_ids_still_enforce_personal_org_scope(self):
+        """Regression: passing file_ids (agent knowledge) must still AND in
+        the personal/org access rule, not bypass it."""
+        user = _make_user()
+        someone_elses_personal_file = uuid.uuid4()
+
+        clause = _scope_filter(user, [someone_elses_personal_file])
+
+        sql = str(clause)
+        assert "files.id IN" in sql
+        assert "files.user_id" in sql
+        assert "files.scope" in sql
+
+    def test_no_file_ids_uses_plain_access_filter(self):
+        """Unchanged behaviour: without file_ids, the plain personal/org
+        access filter applies and no id restriction is added."""
+        user = _make_user()
+
+        clause = _scope_filter(user, None)
+
+        sql = str(clause)
+        assert "files.id IN" not in sql
+        assert "files.user_id" in sql
+        assert "files.scope" in sql
+
+
+class TestWorkspaceVisibility:
+    """D21/D22 — the org branch of _scope_filter must also be gated by
+    workspace_id, for both internal and client-seat users. This is the
+    safety floor for Client Workspaces sharing this instance with internal
+    staff: without it, any signed-in client seat could retrieve every
+    internal org file (and vice versa)."""
+
+    def test_org_branch_is_workspace_gated(self):
+        """The org branch must reference files.workspace_id, not just
+        files.scope — regression guard for the D21/D22 tenant leak."""
+        user = _make_user()
+
+        clause = _scope_filter(user, None)
+
+        sql = str(clause)
+        assert "files.workspace_id" in sql
+
+    def test_internal_and_client_users_both_produce_workspace_gated_clauses(self):
+        """Both an internal user (workspace_id=None) and a client seat
+        (workspace_id=<uuid>) must compile a workspace-gated org clause —
+        i.e. the predicate is never silently dropped for either tenant class."""
+        internal_user = _make_user(workspace_id=None)
+        client_user = _make_user(workspace_id=uuid.uuid4())
+
+        internal_sql = str(_scope_filter(internal_user, None))
+        client_sql = str(_scope_filter(client_user, None))
+
+        assert "files.workspace_id" in internal_sql
+        assert "files.workspace_id" in client_sql
+
+
+class TestEffectiveWorkspaceOverride:
+    """Regression guard for B1 (preview mode returns zero case matches):
+    a staff previewer has user.workspace_id IS NULL, so the org branch must
+    be able to key off an explicit effective_workspace_id instead — see
+    app/services/workspace.py::workspace_visibility_filter_by_workspace_id.
+    """
+
+    def test_none_override_is_unchanged_behaviour(self):
+        """Every existing caller passes no override; the compiled clause
+        must be identical to the pre-override behaviour."""
+        user = _make_user(workspace_id=None)
+
+        without_param = str(_scope_filter(user, None))
+        with_none = str(_scope_filter(user, None, effective_workspace_id=None))
+
+        assert without_param == with_none
+
+    def test_override_replaces_users_own_workspace_as_tenant_key(self):
+        """A staff previewer (user.workspace_id=None) with an explicit
+        effective_workspace_id must compile a clause keyed to that
+        workspace, not to the user's own (absent) tenant."""
+        staff = _make_user(workspace_id=None)
+        demo_ws = uuid.uuid4()
+
+        own_clause = str(_scope_filter(staff, None))
+        overridden_clause = str(_scope_filter(staff, None, effective_workspace_id=demo_ws))
+
+        # Both reference files.workspace_id, but bind different parameters —
+        # the override must not just reproduce the user's own-tenant clause.
+        assert "files.workspace_id" in overridden_clause
+        assert own_clause != overridden_clause or demo_ws is None
+
+
+class TestRetrieveEvalKnobs:
+    """max_distance / strict exist only for the offline eval harness — both
+    must be no-ops for every production call site, which never sets them."""
+
+    async def test_empty_query_short_circuits_before_strict_matters(self):
+        # retrieve() returns [] on blank query before ever touching the
+        # embedder, so strict=True must not raise here.
+        user = _make_user()
+        result = await retrieve(session=MagicMock(), user=user, query="   ", strict=True)
+        assert result == []

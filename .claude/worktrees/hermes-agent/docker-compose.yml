@@ -1,0 +1,154 @@
+services:
+  postgres:
+    runtime: runc
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: brandbiz
+      POSTGRES_USER: brandbiz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brandbiz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    restart: unless-stopped
+
+  backend-api:
+    build: ./backend
+    runtime: runc
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: brandbiz
+      POSTGRES_USER: brandbiz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}
+      JWT_SECRET: ${JWT_SECRET:?required}
+      LLM_PRIMARY_URL: ${LLM_PRIMARY_URL:-http://192.168.20.18:12341}
+      LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-gemma4:26b}
+      # Embedding server — point at the same Ollama host; model must be pulled first
+      # e.g. `ollama pull bge-m3:latest` on the server
+      LLM_EMBED_URL: ${LLM_EMBED_URL:-http://192.168.20.18:12341}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-bge-m3:latest}
+      # Release VRAM after each request so models share one GPU on demand.
+      LLM_KEEP_ALIVE: ${LLM_KEEP_ALIVE:-0}
+      # Local blob storage (volume-mounted below)
+      FILE_STORAGE_DIR: /data/files
+      COOKIE_SECURE: "false"
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      PERPLEXITY_API_KEY: ${PERPLEXITY_API_KEY:-}
+      # Hermes Agent — runs as the `hermes` service in this compose stack (see below).
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      HERMES_API_URL: ${HERMES_API_URL:-http://hermes:8642/v1}
+      HERMES_API_TIMEOUT: ${HERMES_API_TIMEOUT:-600}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
+      # Obsidian vault sync — leave VAULT_GIT_URL unset to disable
+      VAULT_GIT_URL: ${VAULT_GIT_URL:-}
+      VAULT_DIR: /data/vault
+      VAULT_BRANCH: ${VAULT_BRANCH:-main}
+      VAULT_BOT_EMAIL: ${VAULT_BOT_EMAIL:-obsidian-bot@service.local}
+    healthcheck:
+      # Use HTTP/1.0: http.client's default HTTP/1.1 keep-alive mode causes a
+      # ~3-second recv() stall on Docker's loopback before the status line
+      # is returned, making the check unreliable with short timeouts.
+      test: ["CMD", "python", "-c",
+        "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c._http_vsn=10; c._http_vsn_str='HTTP/1.0'; c.request('GET','/health'); r=c.getresponse(); sys.exit(0 if r.status==200 else 1)"]
+      interval: 10s
+      timeout: 8s
+      retries: 6
+      start_period: 20s
+    volumes:
+      - files_data:/data/files
+      - vault_data:/data/vault
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  # One-shot: writes Hermes's config.yaml/.env into hermes_data on first boot
+  # only (never overwrites, so live sessions/memory/skills persist across
+  # restarts). Keeps the Hermes container image itself unmodified/official.
+  hermes-init:
+    image: alpine:3.20
+    runtime: runc
+    environment:
+      HERMES_API_KEY: ${HERMES_API_KEY:?required}
+      HERMES_OLLAMA_URL: ${HERMES_OLLAMA_URL:-http://192.168.20.18:12341/v1}
+      HERMES_OLLAMA_MODEL: ${HERMES_OLLAMA_MODEL:-hermes3:8b}
+    volumes:
+      - hermes_data:/opt/data
+    entrypoint: sh
+    command:
+      - -c
+      - |
+        set -e
+        if [ ! -f /opt/data/config.yaml ]; then
+          cat > /opt/data/config.yaml <<EOF
+        model:
+          provider: custom
+          model: ${HERMES_OLLAMA_MODEL}
+          base_url: ${HERMES_OLLAMA_URL}
+          api_key: "none"
+        EOF
+          echo "wrote /opt/data/config.yaml"
+        fi
+        if [ ! -f /opt/data/.env ]; then
+          cat > /opt/data/.env <<EOF
+        API_SERVER_ENABLED=true
+        API_SERVER_HOST=0.0.0.0
+        API_SERVER_PORT=8642
+        API_SERVER_KEY=${HERMES_API_KEY}
+        EOF
+          echo "wrote /opt/data/.env"
+        fi
+    restart: "no"
+
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    runtime: runc
+    command: ["gateway", "run"]
+    ports:
+      - "8642:8642"
+    volumes:
+      - hermes_data:/opt/data
+    networks: [internal]
+    depends_on:
+      hermes-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend-chat:
+    runtime: runc
+    build:
+      context: ./frontend-chat
+      target: runner
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      BACKEND_URL: http://backend-api:8000
+      NODE_ENV: development
+    networks: [internal]
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  files_data:
+  vault_data:
+  hermes_data:
