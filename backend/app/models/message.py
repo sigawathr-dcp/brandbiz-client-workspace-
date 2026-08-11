@@ -33,10 +33,16 @@ class Message(Base):
         nullable=False,
     )
     role: Mapped[str] = mapped_column(_message_role_pg, nullable=False)
-    content_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    content_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    content_tag: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Nullable (as of 0047_message_retention) — D14 drops these 30 days after
+    # created_at via app/services/retention.py::purge_expired_messages. The
+    # row itself, and every other column, is kept indefinitely; only the
+    # encrypted content is dropped. See crypto.py::decrypt_message for the
+    # read-side placeholder this produces.
+    content_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content_tag: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    content_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     detected_tier: Mapped[str | None] = mapped_column(_data_tier_pg, nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tokens_input: Mapped[int | None] = mapped_column(Integer, nullable=True)

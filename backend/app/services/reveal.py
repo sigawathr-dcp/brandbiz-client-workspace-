@@ -323,7 +323,11 @@ async def view(
     if msg is None:
         raise HTTPException(500, "Target message missing; cannot decrypt")
 
-    plaintext = crypto.decrypt(
+    # D14 can beat a slow reveal approval to the punch (content purged 30
+    # days after created_at) — crypto.decrypt_message surfaces that as a
+    # readable placeholder instead of a 500, and the one-time view above is
+    # still consumed correctly either way.
+    plaintext = crypto.decrypt_message(
         msg.content_ciphertext,
         msg.content_nonce,
         msg.content_tag,

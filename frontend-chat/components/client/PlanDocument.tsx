@@ -41,6 +41,7 @@ export default function PlanDocument({ planId }: { planId: string }) {
   }
 
   const { budget } = plan
+  const agentName = plan.agent_name ?? 'น้องภูมิ'
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -88,7 +89,7 @@ export default function PlanDocument({ planId }: { planId: string }) {
             {plan.title}
           </div>
           <div style={{ fontSize: 14, color: 'var(--ink-3)', marginBottom: 26, paddingBottom: 22, borderBottom: '1px solid var(--line)' }}>
-            Drafted by น้องภูมิ · {new Date(plan.created_at).toLocaleDateString()} · {plan.status === 'draft' ? 'awaiting expert review' : plan.status}
+            Drafted by {agentName} · {new Date(plan.created_at).toLocaleDateString()} · {plan.status === 'draft' ? 'awaiting expert review' : plan.status}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -182,7 +183,7 @@ export default function PlanDocument({ planId }: { planId: string }) {
               padding: '20px 22px',
             }}
           >
-            <PlanRating planId={planId} initial={plan.rating} />
+            <PlanRating planId={planId} initial={plan.rating} agentName={agentName} />
           </div>
         </div>
 

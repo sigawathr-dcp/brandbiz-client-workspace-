@@ -86,6 +86,13 @@ class ClientProfile(Base):
     )
 
 
+#: Set inline in app/routers/client.py::run_research (there's no state
+#: machine helper for this one) — declared here so it's discoverable
+#: alongside VALID_WORKSPACE_KINDS / VALID_PLAN_STATUSES / VALID_LEAD_STATUSES
+#: rather than only living as string literals at the call sites.
+VALID_RESEARCH_STATUSES: frozenset[str] = frozenset({"pending", "done", "failed"})
+
+
 class ResearchRun(Base):
     """One market-research scan (routed through PolicyEngine at the
     Perplexity model code — see app/routers/client.py::run_research).

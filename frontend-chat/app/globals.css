@@ -121,6 +121,7 @@
 html { font-size: 14px; }
 
 body {
+  min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
@@ -151,6 +152,13 @@ button.danger   { background: var(--danger);  color: #fff; }
 button.danger:hover  { background: color-mix(in oklab, var(--danger) 80%, #000); }
 button.ghost    { background: transparent; color: var(--ink-3); border: 1px solid var(--line); }
 button.ghost:hover   { color: var(--ink); border-color: var(--line-2); }
+
+/* NavRail.tsx "Your journey" chapter rows — reachable chapters render as a
+ * <button>, locked ones as a plain <div>; this hover is the only visual
+ * signal that a chapter is clickable beyond the cursor, so it needs its own
+ * rule rather than the generic button:hover treatment above. */
+.client-navrail-stage:hover { background: var(--surface-2) !important; }
+.client-navrail-stage[aria-current="step"]:hover { background: var(--accent-weak) !important; }
 
 input, select {
   background: var(--surface);
@@ -231,7 +239,8 @@ tr:hover td { background: var(--surface-2); }
 
 .app-shell {
   display: flex;
-  height: 100vh;
+  height: 100vh; /* fallback for browsers without dvh support */
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -327,12 +336,20 @@ tr:hover td { background: var(--surface-2); }
   grid-template-columns: 212px 1fr 372px;
 }
 
+/* min-height: 0 on both side columns: grid items default to min-height auto
+ * (content height), so a tall Research tab or journey list would stretch the
+ * column past the viewport-bounded track — the panel's internal flex
+ * scroller then never activates and everything below the fold becomes
+ * unreachable. The chat column already does this via an inline minHeight. */
 .client-navrail {
   position: relative;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .client-workpanel {
   position: relative;
+  min-height: 0;
 }
 
 .client-navrail-toggle,
@@ -404,6 +421,13 @@ tr:hover td { background: var(--surface-2); }
   display: flex;
   gap: 9px;
   justify-content: flex-end;
+}
+
+/* PlanRating.tsx's 1-10 NPS score buttons — inline-styled everywhere else,
+ * but the column count needs to drop on very narrow phones (see the 480px
+ * rule below), so it lives here per the class-for-@media convention. */
+.client-nps-grid {
+  grid-template-columns: repeat(10, 1fr);
 }
 
 /* Above 768px but below 1180px, the rail (212px) + work panel (372px) chrome
@@ -500,6 +524,14 @@ tr:hover td { background: var(--surface-2); }
   .client-leadmodal-card { width: 100%; }
   .client-leadmodal-body { padding: 18px 16px 16px; }
   .client-leadmodal-actions > button { flex: 1; }
+}
+
+/* Ten 1fr columns get uncomfortably narrow to tap below ~480px — drop to
+ * two rows of 5 rather than shrinking further. */
+@media (max-width: 480px) {
+  .client-nps-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
 }
 
 /* ---- Keyframes ---- */

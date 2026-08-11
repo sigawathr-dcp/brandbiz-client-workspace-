@@ -28,7 +28,7 @@ export default function PlansListPage() {
         {plans === null && <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>Loading…</div>}
         {plans !== null && plans.length === 0 && (
           <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>
-            No plans saved yet — chat with น้องภูมิ and choose &quot;Save as a plan&quot; once one is drafted.
+            No plans saved yet — chat with your Brandbiz strategist and choose &quot;Save as a plan&quot; once one is drafted.
           </div>
         )}
         {plans !== null && plans.length > 0 && (

@@ -170,6 +170,17 @@ def total_steps() -> int:
     return len(INTAKE_SCRIPT)
 
 
+def field_manifest() -> list[dict[str, str]]:
+    """Ordered [{key, label}] for every intake field — the display contract
+    for the frontend Profile tab (WorkPanel.tsx), served on GET
+    /client/bootstrap so adding/renaming a step here can never desync the
+    frontend's field list or its completeness math."""
+    return [
+        {"key": step["field"], "label": FIELD_LABELS.get(step["field"], step["field"])}
+        for step in INTAKE_SCRIPT
+    ]
+
+
 def step_at(index: int) -> IntakeStep | None:
     """Return the step at `index`, or None once intake is complete."""
     if 0 <= index < len(INTAKE_SCRIPT):

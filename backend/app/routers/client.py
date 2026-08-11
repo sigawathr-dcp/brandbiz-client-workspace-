@@ -44,12 +44,14 @@ from app.db import get_db
 from app.deps import ClientContext, require_client_context
 from app.llm.base import ChatMessage
 from app.llm.router import PERPLEXITY_MODEL_CODE, get_router
+from app.models.audit import AuditLog
 from app.models.client_intake import CaseMatch, ClientProfile, ResearchRun
 from app.models.conversation import Conversation
 from app.models.user import User
 from app.services import agent as agent_svc
 from app.services import audit as audit_svc
 from app.services import case_match as case_match_svc
+from app.services.case_card import CaseCard
 from app.services import client_intake as intake_svc
 from app.services import lead as lead_svc
 from app.services import plan as plan_svc
@@ -153,6 +155,11 @@ def _current_step_out(step_index: int) -> CurrentStepOut | None:
     )
 
 
+class IntakeFieldOut(BaseModel):
+    key: str
+    label: str
+
+
 class BootstrapOut(BaseModel):
     workspace: dict
     agent: dict | None
@@ -161,6 +168,10 @@ class BootstrapOut(BaseModel):
     total_steps: int
     completed: bool
     fields: dict[str, str]
+    # Ordered display manifest for the Profile tab — WorkPanel.tsx renders
+    # rows and computes completeness from this, not a local copy of the
+    # script (see client_intake.py::field_manifest).
+    intake_fields: list[IntakeFieldOut]
     current_step: CurrentStepOut | None
     plan_count: int
     # True when an internal staff member (no workspace of their own) is
@@ -173,6 +184,21 @@ class BootstrapOut(BaseModel):
     # (not just a previewing staff member) the "open the full AI workspace"
     # link. See app/deps.py::require_internal for the enforcement side.
     internal_app_enabled: bool
+    # Replays a previously-run market scan / case match / saved plan so the
+    # "Your journey" chapters in NavRail.tsx stay unlocked (and the
+    # Research/Cases work-panel tabs stay reachable) across a page reload —
+    # without this, ClientWorkspace.tsx has no way to learn these steps
+    # already ran and would have to re-trigger a billable Perplexity call
+    # just to redraw the UI. 'idle' means no run/match/plan exists yet;
+    # 'pending' is deliberately never surfaced here — a run stuck at
+    # "pending" means the browser was closed mid-scan and nothing will ever
+    # finish it (there's no background worker), so it's reported as 'error'
+    # instead of a spinner that can never resolve.
+    research_status: str = "idle"
+    research: dict | None = None
+    cases_status: str = "idle"
+    cases: dict | None = None
+    latest_plan: dict | None = None
 
 
 class IntakeAnswerIn(BaseModel):
@@ -198,6 +224,107 @@ class ClientChatIn(BaseModel):
     content: str
 
 
+def _research_out(run: ResearchRun) -> dict:
+    return {"id": str(run.id), "findings": run.findings or [], "citations": run.citations or []}
+
+
+def _cases_out(rows: list[tuple[CaseMatch, CaseCard | None]]) -> dict:
+    return {
+        "matches": [
+            {
+                "file_id": str(row.file_id),
+                "filename": row.filename,
+                "score": round(row.score, 2),
+                "rationale": row.rationale,
+                "title": card.title if card else None,
+                "client": card.client if card else None,
+                "category": card.category if card else None,
+                "source_url": card.source_url if card else None,
+                "summary": card.summary if card else None,
+                "image_url": card.image_url if card else None,
+            }
+            for row, card in rows
+        ]
+    }
+
+
+# Backend statuses (research_runs.status) -> the vocabulary journey.ts /
+# WorkPanel.tsx already speak (idle | pending | done | error). See
+# BootstrapOut.research_status for why 'pending' maps to 'error' here.
+_RESEARCH_STATUS_OUT = {"done": "done", "failed": "error", "pending": "error"}
+
+
+async def _bootstrap_research_and_cases(
+    session: AsyncSession, ctx: ClientContext, profile: ClientProfile
+) -> tuple[str, dict | None, str, dict | None]:
+    """Replay the latest research run + case match for this seat's
+    conversation, in the same response shape POST /client/research and
+    POST /client/cases return, so bootstrap can restore them after a
+    reload. See BootstrapOut for the field contract."""
+    research_status = "idle"
+    research_out: dict | None = None
+    run = (
+        await session.execute(
+            select(ResearchRun)
+            .where(
+                ResearchRun.workspace_id == ctx.workspace_id,
+                ResearchRun.user_id == ctx.user.id,
+                ResearchRun.conversation_id == profile.conversation_id,
+            )
+            .order_by(ResearchRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if run is not None:
+        research_status = _RESEARCH_STATUS_OUT.get(run.status, "error")
+        if run.status == "done":
+            research_out = _research_out(run)
+
+    cases_status = "idle"
+    cases_out: dict | None = None
+    match_rows = (
+        await session.execute(
+            select(CaseMatch)
+            .where(
+                CaseMatch.workspace_id == ctx.workspace_id,
+                CaseMatch.user_id == ctx.user.id,
+                CaseMatch.conversation_id == profile.conversation_id,
+            )
+            .order_by(CaseMatch.score.desc(), CaseMatch.filename)
+        )
+    ).scalars().all()
+    if match_rows:
+        cases_status = "done"
+        cards = await case_match_svc.cards_for_file_ids(session, [r.file_id for r in match_rows])
+        cases_out = _cases_out([(r, cards.get(r.file_id)) for r in match_rows])
+    else:
+        # A zero-match run leaves no CaseMatch rows behind (nothing to
+        # insert), so row-existence alone can't tell "never ran" from "ran,
+        # found nothing" — the audit trail can: run_case_match logs
+        # action="case_matched" unconditionally, even for zero results. A
+        # workspace with no case library attached hits this on every run,
+        # so without the fallback the chapter would read "Matching now…"
+        # forever after a reload instead of "Cases matched" with an empty
+        # result list.
+        ran = (
+            await session.execute(
+                select(AuditLog.id)
+                .where(
+                    AuditLog.action == "case_matched",
+                    AuditLog.resource_type == "workspace",
+                    AuditLog.resource_id == ctx.workspace_id,
+                    AuditLog.user_id == ctx.user.id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if ran is not None:
+            cases_status = "done"
+            cases_out = {"matches": []}
+
+    return research_status, research_out, cases_status, cases_out
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -216,6 +343,10 @@ async def bootstrap(
     profile = await _get_or_create_profile(session, ctx.user, ctx.workspace_id)
     fields = _decrypt_fields(profile)
     plans = await plan_svc.list_plans(session, ctx.user, ctx.workspace_id)
+    research_status, research_out, cases_status, cases_out = await _bootstrap_research_and_cases(
+        session, ctx, profile
+    )
+    latest_plan = {"id": str(plans[0].id), "version": plans[0].version} if plans else None
 
     agent_out = None
     if agent is not None:
@@ -238,10 +369,16 @@ async def bootstrap(
         total_steps=intake_svc.total_steps(),
         completed=profile.completed_at is not None,
         fields=fields,
+        intake_fields=[IntakeFieldOut(**f) for f in intake_svc.field_manifest()],
         current_step=_current_step_out(profile.step),
         plan_count=len(plans),
         is_preview=ctx.is_preview,
         internal_app_enabled=settings.client_internal_access_enabled,
+        research_status=research_status,
+        research=research_out,
+        cases_status=cases_status,
+        cases=cases_out,
+        latest_plan=latest_plan,
     )
 
 
@@ -448,7 +585,7 @@ async def run_research(
         details={"research_run_id": str(run.id), "citation_count": len(citations)},
     )
 
-    return {"id": str(run.id), "findings": findings, "citations": citations}
+    return _research_out(run)
 
 
 @router.post("/cases")
@@ -522,23 +659,7 @@ async def run_case_match(
         details={"match_count": len(rows)},
     )
 
-    return {
-        "matches": [
-            {
-                "file_id": str(row.file_id),
-                "filename": row.filename,
-                "score": round(row.score, 2),
-                "rationale": row.rationale,
-                "title": card.title if card else None,
-                "client": card.client if card else None,
-                "category": card.category if card else None,
-                "source_url": card.source_url if card else None,
-                "summary": card.summary if card else None,
-                "image_url": card.image_url if card else None,
-            }
-            for row, card in rows
-        ]
-    }
+    return _cases_out(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -582,13 +703,17 @@ class PlanOut(BaseModel):
     budget: dict | None
     provenance: dict | None
     created_at: datetime
+    # The workspace agent's display name at read time (None when the
+    # workspace has no assigned agent) — lets the plan pages say who
+    # drafted it without hardcoding the agent's name in the frontend.
+    agent_name: str | None = None
     # Only populated by GET /plans/{id} — list_plans/save_plan skip the
     # extra query since the plans list/save response never renders them.
     versions: list[PlanVersionOut] = []
     rating: PlanRatingOut | None = None
 
 
-def _plan_out(plan, *, versions: list = (), rating=None) -> PlanOut:
+def _plan_out(plan, *, agent_name: str | None = None, versions: list = (), rating=None) -> PlanOut:
     body = plan_svc.decrypt_body(plan)
     return PlanOut(
         id=plan.id,
@@ -601,6 +726,7 @@ def _plan_out(plan, *, versions: list = (), rating=None) -> PlanOut:
         budget=plan.budget,
         provenance=plan.provenance,
         created_at=plan.created_at,
+        agent_name=agent_name,
         versions=[PlanVersionOut(version=v.version, created_at=v.created_at) for v in versions],
         rating=(
             PlanRatingOut(score=rating.score, comment=rating.comment, created_at=rating.created_at)
@@ -643,7 +769,8 @@ async def save_plan(
 ) -> PlanOut:
     _require_enabled()
     plan = await plan_svc.save_plan(session, ctx.user, ctx.workspace_id, body.conversation_id, body.model_dump())
-    return _plan_out(plan)
+    agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
+    return _plan_out(plan, agent_name=agent.name if agent else None)
 
 
 @router.get("/plans", response_model=list[PlanOut])
@@ -653,7 +780,9 @@ async def list_plans(
 ) -> list[PlanOut]:
     _require_enabled()
     plans = await plan_svc.list_plans(session, ctx.user, ctx.workspace_id)
-    return [_plan_out(p) for p in plans]
+    agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
+    agent_name = agent.name if agent else None
+    return [_plan_out(p, agent_name=agent_name) for p in plans]
 
 
 @router.get("/plans/{plan_id}", response_model=PlanOut)
@@ -666,7 +795,8 @@ async def get_plan(
     plan = await plan_svc.get_plan(session, ctx.user, ctx.workspace_id, plan_id)
     versions = await plan_svc.list_versions(session, plan_id)
     rating = await plan_rating_svc.get_rating(session, ctx.user, ctx.workspace_id, plan_id)
-    return _plan_out(plan, versions=versions, rating=rating)
+    agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
+    return _plan_out(plan, agent_name=agent.name if agent else None, versions=versions, rating=rating)
 
 
 @router.post("/plans/{plan_id}/rating", response_model=PlanRatingOut)

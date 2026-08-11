@@ -2,19 +2,7 @@
 
 import { Ic } from '../ui/Icon'
 import CaseMatchCards from './CaseMatchCards'
-import type { CasesResult, ResearchResult } from './types'
-
-const FIELD_LABELS: Record<string, string> = {
-  industry: 'Business',
-  stage: 'Stage',
-  audience: 'Audience',
-  challenge: 'Challenge',
-  goal: 'Goal',
-  horizon: 'Horizon',
-  budget: 'Budget band',
-  history: 'Brand history',
-}
-const FIELD_ORDER = Object.keys(FIELD_LABELS)
+import type { CasesResult, IntakeField, ResearchResult } from './types'
 
 export type WorkTab = 'profile' | 'research' | 'cases'
 
@@ -27,28 +15,36 @@ export default function WorkPanel({
   tab,
   onTab,
   fields,
+  intakeFields,
+  agentName,
   research,
   researchStatus,
   cases,
   casesStatus,
+  navigable,
 }: {
   tab: WorkTab
   onTab: (t: WorkTab) => void
   fields: Record<string, string>
+  // Ordered field manifest from GET /client/bootstrap — the backend intake
+  // script owns the keys, labels, and order; this component never keeps a
+  // local copy that could desync.
+  intakeFields: IntakeField[]
+  agentName: string
   research: ResearchResult | null
   researchStatus: 'idle' | 'pending' | 'done' | 'error'
   cases: CasesResult | null
   casesStatus: 'idle' | 'pending' | 'done' | 'error'
+  // From journey.ts's Journey.navigable — the single source of truth for
+  // "is this chapter reachable" (also drives NavRail's chapter rows), so
+  // this tab bar doesn't recompute its own lock ternary.
+  navigable: { market: boolean; cases: boolean }
 }) {
-  const filled = FIELD_ORDER.filter((k) => fields[k]).length
-  const pct = Math.round((filled / FIELD_ORDER.length) * 100)
+  const filled = intakeFields.filter((f) => fields[f.key]).length
+  const pct = intakeFields.length > 0 ? Math.round((filled / intakeFields.length) * 100) : 0
 
-  // Locked, not merely "not done yet" — runResearchThenCases deliberately
-  // switches to these tabs BEFORE their fetch resolves (to show the
-  // pending stepper live), so the lock has to key off 'idle', or the tab
-  // would appear clickable-but-empty for the two steps that already ran.
-  const researchLocked = researchStatus === 'idle'
-  const casesLocked = casesStatus === 'idle'
+  const researchLocked = !navigable.market
+  const casesLocked = !navigable.cases
 
   const tabBtn = (t: WorkTab, label: string, locked: boolean) => (
     <button
@@ -101,27 +97,27 @@ export default function WorkPanel({
                 Company profile
               </div>
               <div style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--ink-3)' }}>
-                {filled} of {FIELD_ORDER.length} filled
+                {filled} of {intakeFields.length} filled
               </div>
             </div>
             <div style={{ height: 4, borderRadius: 2, background: 'var(--surface-sunk)', overflow: 'hidden' }}>
               <div style={{ height: '100%', background: 'var(--accent)', width: `${pct}%`, transition: 'width .5s ease' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {FIELD_ORDER.map((k) => (
-                <div key={k} style={{ display: 'flex', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--line)', alignItems: 'flex-start' }}>
+              {intakeFields.map((f) => (
+                <div key={f.key} style={{ display: 'flex', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--line)', alignItems: 'flex-start' }}>
                   <div style={{ width: 15, flex: 'none', paddingTop: 2 }}>
-                    {fields[k] && (
+                    {fields[f.key] && (
                       <span style={{ display: 'inline-flex', color: 'var(--t1)', animation: 'popIn .3s ease' }}>
                         <Ic.check size={13} strokeWidth={1.7} />
                       </span>
                     )}
                   </div>
                   <div style={{ width: 84, flex: 'none', fontSize: 11.5, color: 'var(--ink-3)', paddingTop: 1 }}>
-                    {FIELD_LABELS[k]}
+                    {f.label}
                   </div>
-                  <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.5, color: fields[k] ? 'var(--ink)' : 'var(--ink-4)' }}>
-                    {fields[k] || 'not asked yet'}
+                  <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.5, color: fields[f.key] ? 'var(--ink)' : 'var(--ink-4)' }}>
+                    {fields[f.key] || 'not asked yet'}
                   </div>
                 </div>
               ))}
@@ -152,7 +148,7 @@ export default function WorkPanel({
               <div style={{ padding: '44px 8px', textAlign: 'center' }}>
                 <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 5 }}>No scan yet</div>
                 <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--ink-3)' }}>
-                  น้องภูมิ runs the external market scan once the intake questions are answered.
+                  {agentName} runs the external market scan once the intake questions are answered.
                 </div>
               </div>
             )}

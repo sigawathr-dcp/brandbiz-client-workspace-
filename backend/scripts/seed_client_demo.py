@@ -20,10 +20,9 @@ existing workspace and agent, and only mints a fresh invite.
 Run from inside the backend-api container:
     docker compose exec backend-api python scripts/seed_client_demo.py
 
-Deliberately NOT seeded here (out of scope for a script — needs real
-files): case-study documents. Upload sanitized case studies via the normal
-Files UI (scope=org), set their workspace_id via SQL or a follow-up
-migration, then attach them to the seeded agent via /agent/{id}/edit —
+Deliberately NOT seeded here: case-study documents. Run this script first,
+then scripts/seed_case_studies.py to generate, upload, and attach the case
+library to the agent seeded here — see that script's docstring.
 POST /client/cases only ever surfaces files actually attached that way.
 """
 
@@ -214,7 +213,7 @@ async def main() -> None:
         print(f"\n  /try/{raw_token}\n")
         print("  Open that path on the frontend (e.g. http://localhost:3000/try/{token}) to redeem it.")
 
-    print("\nDone. Remember: upload + attach sanitized case studies manually (see module docstring),")
+    print("\nDone. Remember: run scripts/seed_case_studies.py to load the case library (see module docstring),")
     print("and replace the placeholder rate card with real sanitized numbers before the event.")
 
 

@@ -35,3 +35,18 @@ def decrypt(ciphertext: bytes, nonce: bytes, tag: bytes, key_version: int) -> st
     """
     plaintext_bytes = AESGCM(_get_key()).decrypt(nonce, ciphertext + tag, None)
     return plaintext_bytes.decode("utf-8")
+
+
+PURGED_PLACEHOLDER = "[message content removed — 30-day retention, D14]"
+
+
+def decrypt_message(
+    ciphertext: bytes | None, nonce: bytes | None, tag: bytes | None, key_version: int
+) -> str:
+    """Same as decrypt(), but returns PURGED_PLACEHOLDER instead of crashing
+    when a message's content_* columns were nulled out by
+    app/services/retention.py::purge_expired_messages (D14 — the row itself
+    is kept for audit/analytics, only the encrypted content is dropped)."""
+    if ciphertext is None or nonce is None or tag is None:
+        return PURGED_PLACEHOLDER
+    return decrypt(ciphertext, nonce, tag, key_version)

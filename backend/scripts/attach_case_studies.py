@@ -12,21 +12,30 @@ seed_client_demo.py's reminder:
   2. attach them to the demo agent (agent_files), so case matching
      searches exactly the case library and nothing else.
 
+The agent is resolved by workspace (via app.services.workspace.get_workspace_agent
+— the same lookup POST /client/cases uses), not a hardcoded id: a hardcoded
+id silently breaks — inserting agent_files rows for an agent that no
+longer exists — the moment the demo agent is re-seeded with a new id.
+
+For an empty DB (no files uploaded yet), prefer
+scripts/seed_case_studies.py, which generates + uploads + attaches in one
+idempotent step. This script stays useful for the "already uploaded
+org-scoped via the internal Files UI, now scope + attach them" case.
+
 Idempotent — re-running is a no-op. Run from inside the container:
     docker compose exec backend-api sh -c \
         "cd /app && PYTHONPATH=/app python scripts/attach_case_studies.py"
 """
 import asyncio
-import uuid
 
 from sqlalchemy import select, update
 
 from app.models.agent import AgentFile
 from app.models.file import File
 from app.models.workspace import Workspace
+from app.services.workspace import get_workspace_agent
 
 DEMO_WORKSPACE_SLUG = "brandbiz-demo"
-DEMO_AGENT_ID = uuid.UUID("86fe9258-b65a-40ea-880f-805036969f12")
 CASE_FILE_PREFIX = "case-study"
 
 
@@ -41,6 +50,11 @@ async def main() -> None:
         ).scalar_one_or_none()
         if ws_id is None:
             print(f"Workspace '{DEMO_WORKSPACE_SLUG}' not found — run seed_client_demo.py first.")
+            return
+
+        agent = await get_workspace_agent(session, ws_id)
+        if agent is None:
+            print(f"No published agent scoped to workspace '{DEMO_WORKSPACE_SLUG}' — run seed_client_demo.py first.")
             return
 
         moved = await session.execute(
@@ -58,18 +72,18 @@ async def main() -> None:
         attached_ids = set(
             (
                 await session.execute(
-                    select(AgentFile.file_id).where(AgentFile.agent_id == DEMO_AGENT_ID)
+                    select(AgentFile.file_id).where(AgentFile.agent_id == agent.id)
                 )
             ).scalars().all()
         )
         new_links = [
-            AgentFile(agent_id=DEMO_AGENT_ID, file_id=fid)
+            AgentFile(agent_id=agent.id, file_id=fid)
             for fid in case_file_ids
             if fid not in attached_ids
         ]
         session.add_all(new_links)
         await session.commit()
-        print(f"files newly attached to agent {DEMO_AGENT_ID}: {len(new_links)}")
+        print(f"files newly attached to agent {agent.id}: {len(new_links)}")
 
 
 if __name__ == "__main__":

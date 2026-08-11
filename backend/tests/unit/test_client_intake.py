@@ -10,7 +10,9 @@ from __future__ import annotations
 import pytest
 
 from app.services.client_intake import (
+    FIELD_LABELS,
     INTAKE_SCRIPT,
+    field_manifest,
     resolve_answer,
     step_at,
     total_steps,
@@ -53,6 +55,20 @@ class TestScriptShape:
     def test_step_at_in_range_returns_step(self):
         assert step_at(0) is not None
         assert step_at(total_steps() - 1) is not None
+
+
+class TestFieldManifest:
+    """GET /client/bootstrap serves this as intake_fields — the Profile
+    tab's display contract (WorkPanel.tsx no longer keeps its own copy)."""
+
+    def test_order_and_length_match_the_script(self):
+        manifest = field_manifest()
+        assert [f["key"] for f in manifest] == [s["field"] for s in INTAKE_SCRIPT]
+        assert len(manifest) == total_steps()
+
+    def test_labels_match_field_labels(self):
+        for f in field_manifest():
+            assert f["label"] == FIELD_LABELS[f["key"]]
 
 
 class TestResolveAnswer:

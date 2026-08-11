@@ -16,6 +16,10 @@ export interface JourneyInput {
   casesStatus: RunStatus
   planDrafted: boolean
   savedVersion: number | null
+  planCount: number
+  // The workspace agent's display name (GET /client/bootstrap) — used in
+  // the retry copy so a renamed agent isn't misnamed here.
+  agentName: string
 }
 
 export interface JourneyStage {
@@ -23,6 +27,13 @@ export interface JourneyStage {
   name: string
   state: StageState
   note: string
+  // Whether NavRail should let this chapter be clicked — distinct from
+  // `state`, which is about done/current/locked *display*. A 'current'
+  // chapter that errored (researchStatus/casesStatus === 'error') is still
+  // navigable so the client can see the retry note; see WorkPanel.tsx's
+  // 'idle' vs 'not done yet' comment for why the underlying predicate keys
+  // off 'idle' rather than 'done'.
+  navigable: boolean
 }
 
 export interface JourneyReward {
@@ -41,8 +52,7 @@ export interface Journey {
   rewards: JourneyReward[]
   pips: ('done' | 'current' | 'future')[]
   headerHint: string
-  researchLocked: boolean
-  casesLocked: boolean
+  navigable: Record<ChapterId, boolean>
 }
 
 const CHAPTER_NAMES: Record<ChapterId, string> = {
@@ -52,11 +62,17 @@ const CHAPTER_NAMES: Record<ChapterId, string> = {
   plan: 'Plan & budget',
 }
 
+// The four-chapter journey shape is the product design, but the COUNT must
+// never be re-hardcoded elsewhere — milestone copy in ClientWorkspace.tsx
+// reads CHAPTER_ORDER.length instead of a literal 4.
+export const CHAPTER_ORDER: ChapterId[] = ['interview', 'market', 'cases', 'plan']
+
 export function deriveJourney(input: JourneyInput): Journey {
   const {
     step, totalSteps, intakeCompleted,
     researchStatus, casesStatus,
-    planDrafted, savedVersion,
+    planDrafted, savedVersion, planCount,
+    agentName,
   } = input
 
   const total = Math.max(1, totalSteps)
@@ -84,7 +100,7 @@ export function deriveJourney(input: JourneyInput): Journey {
     cases: casesDone,
     plan: planSaved,
   }
-  const order: ChapterId[] = ['interview', 'market', 'cases', 'plan']
+  const order = CHAPTER_ORDER
   let currentId: ChapterId | null = order.find((id) => !doneFlags[id]) ?? null
 
   const stageNote = (id: ChapterId, state: StageState): string => {
@@ -95,12 +111,12 @@ export function deriveJourney(input: JourneyInput): Journey {
     }
     if (id === 'market') {
       if (state === 'done') return 'Market scan complete'
-      if (state === 'current') return researchStatus === 'error' ? "Couldn't run — ask น้องภูมิ to retry" : 'Scanning now…'
+      if (state === 'current') return researchStatus === 'error' ? `Couldn't run — ask ${agentName} to retry` : 'Scanning now…'
       return 'Locked'
     }
     if (id === 'cases') {
       if (state === 'done') return 'Cases matched'
-      if (state === 'current') return casesStatus === 'error' ? "Couldn't run — ask น้องภูมิ to retry" : 'Matching now…'
+      if (state === 'current') return casesStatus === 'error' ? `Couldn't run — ask ${agentName} to retry` : 'Matching now…'
       return 'Locked'
     }
     // plan
@@ -109,9 +125,21 @@ export function deriveJourney(input: JourneyInput): Journey {
     return 'Locked'
   }
 
+  // Navigable, not merely "not done yet" — runResearchThenCases deliberately
+  // switches to the Research/Cases tabs BEFORE their fetch resolves (to
+  // show the pending stepper live), so the predicate has to key off 'idle',
+  // or a mid-run chapter would appear clickable-but-empty. Chapter 4 has no
+  // run status of its own, so it keys off ever having drafted/saved a plan.
+  const navigable: Record<ChapterId, boolean> = {
+    interview: true,
+    market: researchStatus !== 'idle',
+    cases: casesStatus !== 'idle',
+    plan: planDrafted || planSaved || planCount > 0,
+  }
+
   const stages: JourneyStage[] = order.map((id) => {
     const state: StageState = doneFlags[id] ? 'done' : id === currentId ? 'current' : 'locked'
-    return { id, name: CHAPTER_NAMES[id], state, note: stageNote(id, state) }
+    return { id, name: CHAPTER_NAMES[id], state, note: stageNote(id, state), navigable: navigable[id] }
   })
 
   const rewards: JourneyReward[] = [
@@ -150,7 +178,6 @@ export function deriveJourney(input: JourneyInput): Journey {
     rewards,
     pips,
     headerHint,
-    researchLocked: researchStatus === 'idle',
-    casesLocked: casesStatus === 'idle',
+    navigable,
   }
 }

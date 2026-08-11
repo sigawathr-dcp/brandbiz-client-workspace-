@@ -83,6 +83,29 @@ def to_match_score(distance: float) -> float:
     return max(0.0, min(1.0, 1.0 - distance))
 
 
+async def cards_for_file_ids(
+    session: AsyncSession, file_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, CaseCard]:
+    """Rebuild CaseCards for a known set of file_ids, without re-running
+    retrieval — lifted out of match_cases() so GET /client/bootstrap can
+    replay a previously-persisted CaseMatch row's card the same way a fresh
+    /client/cases call would build it, instead of re-implementing the
+    full-text concatenation + parse_case_card() call a second time."""
+    if not file_ids:
+        return {}
+    chunk_rows = (
+        await session.execute(
+            select(FileChunk.file_id, FileChunk.content)
+            .where(FileChunk.file_id.in_(file_ids))
+            .order_by(FileChunk.file_id, FileChunk.chunk_index)
+        )
+    ).all()
+    full_texts: dict[uuid.UUID, str] = {}
+    for fid, content in chunk_rows:
+        full_texts[fid] = full_texts.get(fid, "") + content
+    return {fid: parse_case_card(text) for fid, text in full_texts.items()}
+
+
 async def match_cases(
     session: AsyncSession,
     user: User,
@@ -126,23 +149,15 @@ async def match_cases(
     # middle chunk without the "# Case Study:" header, and parse_case_card
     # needs the whole template (title/client/category/source/narrative) to
     # build a presentable card instead of echoing raw markdown at the client.
-    full_texts: dict[uuid.UUID, str] = {}
+    cards: dict[uuid.UUID, CaseCard] = {}
     if include_cards and best_chunks:
         matched_file_ids = [uuid.UUID(c.file_id) for c in best_chunks]
-        chunk_rows = (
-            await session.execute(
-                select(FileChunk.file_id, FileChunk.content)
-                .where(FileChunk.file_id.in_(matched_file_ids))
-                .order_by(FileChunk.file_id, FileChunk.chunk_index)
-            )
-        ).all()
-        for fid, content in chunk_rows:
-            full_texts[fid] = full_texts.get(fid, "") + content
+        cards = await cards_for_file_ids(session, matched_file_ids)
 
     results: list[CaseMatchResult] = []
     for c in best_chunks:
         file_id = uuid.UUID(c.file_id)
-        card = parse_case_card(full_texts.get(file_id, c.content)) if include_cards else None
+        card = cards[file_id] if file_id in cards else (parse_case_card(c.content) if include_cards else None)
         results.append(
             CaseMatchResult(
                 file_id=file_id,

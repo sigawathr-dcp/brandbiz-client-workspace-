@@ -5,7 +5,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 
 import app.crypto as crypto_module
-from app.crypto import decrypt, encrypt
+from app.crypto import PURGED_PLACEHOLDER, decrypt, decrypt_message, encrypt
 
 _KEY_V1 = base64.b64encode(secrets.token_bytes(32)).decode()
 _KEY_V2 = base64.b64encode(secrets.token_bytes(32)).decode()
@@ -75,3 +75,14 @@ def test_wrong_key_version_raises():
     ct, nonce, tag, _ = encrypt("data")
     with pytest.raises(KeyError):
         decrypt(ct, nonce, tag, 99)
+
+
+def test_decrypt_message_round_trips_like_decrypt():
+    ct, nonce, tag, ver = encrypt("still here")
+    assert decrypt_message(ct, nonce, tag, ver) == "still here"
+
+
+def test_decrypt_message_returns_placeholder_when_content_purged():
+    """D14 nulls out content_ciphertext/nonce/tag on a Message row after 30
+    days (app/services/retention.py) — decrypt_message must not raise."""
+    assert decrypt_message(None, None, None, 1) == PURGED_PLACEHOLDER

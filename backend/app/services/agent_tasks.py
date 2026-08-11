@@ -425,7 +425,7 @@ async def get_transcript(session: AsyncSession, task: AgentTask) -> list[dict]:
         {
             "id": row.id,
             "role": row.role,
-            "content": crypto.decrypt(
+            "content": crypto.decrypt_message(
                 row.content_ciphertext, row.content_nonce, row.content_tag, row.key_version
             ),
             "model_used": row.model_used,

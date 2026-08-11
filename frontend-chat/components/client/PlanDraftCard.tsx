@@ -16,6 +16,7 @@ export default function PlanDraftCard({
   savedPlanId,
   onSave,
   saving,
+  agentName,
 }: {
   status: 'pending' | 'done' | 'error'
   plan?: DraftPlan
@@ -25,6 +26,7 @@ export default function PlanDraftCard({
   savedPlanId?: string
   onSave: () => void
   saving?: boolean
+  agentName: string
 }) {
   if (status === 'pending') {
     return (
@@ -36,7 +38,7 @@ export default function PlanDraftCard({
   if (status === 'error' || !plan) {
     return (
       <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--ink-3)' }}>
-        น้องภูมิ couldn&apos;t draft a plan just now — try again in a moment.
+        {agentName} couldn&apos;t draft a plan just now — try again in a moment.
         {showDetail && error && (
           <div style={{ marginTop: 4, fontSize: 11.5, fontFamily: 'monospace' }}>Reason: {error}</div>
         )}
@@ -132,7 +134,7 @@ export default function PlanDraftCard({
           }}
         >
           <div style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
-            Every line traces to a rate-card row. น้องภูมิ can&apos;t price work that has no row —
+            Every line traces to a rate-card row. {agentName} can&apos;t price work that has no row —
             those are left for an expert. Final quote is confirmed by a human.
           </div>
         </div>

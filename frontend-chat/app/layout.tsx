@@ -40,7 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
       className={`${ibmSans.variable} ${ibmSansThai.variable} ${ibmMono.variable}`}
     >
-      <body style={{ height: '100vh', overflow: 'hidden' }}>
+      <body>
         {children}
       </body>
     </html>

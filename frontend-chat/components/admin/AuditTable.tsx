@@ -104,7 +104,7 @@ export default function AuditTable({ initialData }: { initialData: AuditLogListR
         </div>
       </div>
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflowX: 'auto' }}>
         <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', color: 'var(--muted)', fontSize: 12, display: 'flex', justifyContent: 'space-between' }}>
           <span>{loading ? 'Loading…' : `${data.total.toLocaleString()} entries`}</span>
           <span>Page {currentPage} of {totalPages || 1}</span>

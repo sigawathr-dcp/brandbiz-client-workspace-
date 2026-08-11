@@ -4,9 +4,9 @@ import { useState } from 'react'
 import { npsVerdict } from '@/lib/nps'
 import type { PlanRatingData } from './types'
 
-function ratingPrompt(score: number | null): string {
-  if (score === null) return 'How likely are you to recommend น้องภูมิ to another business owner?'
-  if (score <= 6) return "What made this fall short? น้องภูมิ can't fix what it isn't told."
+function ratingPrompt(score: number | null, agentName: string): string {
+  if (score === null) return `How likely are you to recommend ${agentName} to another business owner?`
+  if (score <= 6) return `What made this fall short? ${agentName} can't fix what it isn't told.`
   if (score <= 8) return 'What would have made this a 10?'
   return "What worked best? We'll tell the strategist before your call."
 }
@@ -15,7 +15,15 @@ function ratingPrompt(score: number | null): string {
 // rating on the saved plan document, so the strategist sees it before the
 // handoff call (app/routers/admin_leads.py's LeadOut.nps_score/nps_comment).
 // One rating per (plan, user), upserted — see app/services/plan_rating.py.
-export default function PlanRating({ planId, initial }: { planId: string; initial: PlanRatingData | null }) {
+export default function PlanRating({
+  planId,
+  initial,
+  agentName,
+}: {
+  planId: string
+  initial: PlanRatingData | null
+  agentName: string
+}) {
   const [score, setScore] = useState<number | null>(initial?.score ?? null)
   const [hoverScore, setHoverScore] = useState<number | null>(null)
   const [comment, setComment] = useState(initial?.comment ?? '')
@@ -113,9 +121,9 @@ export default function PlanRating({ planId, initial }: { planId: string; initia
         )}
       </div>
       <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-3)', marginBottom: 14 }}>
-        {ratingPrompt(score)}
+        {ratingPrompt(score, agentName)}
       </div>
-      <div onMouseLeave={() => setHoverScore(null)} style={{ display: 'grid', gridTemplateColumns: 'repeat(10,1fr)', gap: 6 }}>
+      <div onMouseLeave={() => setHoverScore(null)} className="client-nps-grid" style={{ display: 'grid', gap: 6 }}>
         {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
           const active = (hoverScore ?? score ?? 0) >= n
           const chosen = score === n

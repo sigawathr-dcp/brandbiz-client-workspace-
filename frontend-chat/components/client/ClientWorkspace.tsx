@@ -7,7 +7,7 @@ import CaseMatchCards from './CaseMatchCards'
 import ChatProgress from './ChatProgress'
 import InsightCallout from './InsightCallout'
 import IntakeChips from './IntakeChips'
-import { deriveJourney } from './journey'
+import { CHAPTER_ORDER, deriveJourney, type ChapterId } from './journey'
 import MilestoneTurn from './MilestoneTurn'
 import NavRail from './NavRail'
 import PlanDraftCard from './PlanDraftCard'
@@ -20,6 +20,7 @@ import type {
   CurrentStep,
   DraftPlan,
   IntakeAnswerResponse,
+  IntakeField,
   ResearchResult,
   Turn,
 } from './types'
@@ -45,6 +46,7 @@ export default function ClientWorkspace() {
   const [internalAppEnabled, setInternalAppEnabled] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [fields, setFields] = useState<Record<string, string>>({})
+  const [intakeFields, setIntakeFields] = useState<IntakeField[]>([])
 
   const [turns, setTurns] = useState<Turn[]>([])
   const [currentStep, setCurrentStep] = useState<CurrentStep | null>(null)
@@ -52,7 +54,9 @@ export default function ClientWorkspace() {
   const [chipsHidden, setChipsHidden] = useState(false)
   const [busy, setBusy] = useState(false)
   const [step, setStep] = useState(0)
-  const [totalSteps, setTotalSteps] = useState(8)
+  // Hydrated from bootstrap before anything renders (the loading spinner
+  // holds until then), so no intake length is assumed here.
+  const [totalSteps, setTotalSteps] = useState(0)
 
   const [research, setResearch] = useState<ResearchResult | null>(null)
   const [researchStatus, setResearchStatus] = useState<'idle' | 'pending' | 'done' | 'error'>('idle')
@@ -72,6 +76,11 @@ export default function ClientWorkspace() {
 
   const listRef = useRef<HTMLDivElement>(null)
   const conversationIdRef = useRef<string | null>(null)
+  // Scroll targets for handleSelectChapter — one ref per rendered turn,
+  // keyed by turn id, so "jump to the market scan" can find the last
+  // research/cases/plan turn without threading extra state through the
+  // turns array itself.
+  const turnRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
   useEffect(() => {
     conversationIdRef.current = conversationId
@@ -103,6 +112,7 @@ export default function ClientWorkspace() {
         setInternalAppEnabled(data.internal_app_enabled)
         setConversationId(data.conversation_id)
         setFields(data.fields)
+        setIntakeFields(data.intake_fields ?? [])
         setIntakeCompleted(data.completed)
         setPlanCount(data.plan_count)
         setStep(data.step)
@@ -112,14 +122,51 @@ export default function ClientWorkspace() {
           setTurns([{ id: nextId(), who: 'ai', kind: 'text', text: data.current_step.question }])
           setCurrentStep(data.current_step)
         } else if (data.completed) {
-          setTurns([
+          // Replay whatever already ran so the "Your journey" chapters
+          // (journey.ts) come back unlocked on reload instead of re-locking
+          // Research/Cases and dropping the plan chapter — see
+          // BootstrapOut.research_status's docstring on the backend. The
+          // plan draft card itself isn't replayed (bootstrap doesn't carry
+          // the plan body — see PlanOut.provenance et al on GET
+          // /client/plans/{id}); handleSelectChapter routes to /w/plans/{id}
+          // instead when there's no in-thread card to scroll to.
+          const welcomeTurns: Turn[] = [
             {
               id: nextId(),
               who: 'ai',
               kind: 'text',
               text: `Welcome back — your profile is complete. Ask ${data.agent?.name ?? 'น้องภูมิ'} anything, or pick up where you left off.`,
             },
-          ])
+          ]
+          if (data.research_status !== 'idle') {
+            setResearchStatus(data.research_status)
+            setResearch(data.research)
+            welcomeTurns.push({
+              id: nextId(),
+              who: 'ai',
+              kind: 'research',
+              text: '',
+              researchStatus: data.research_status,
+              research: data.research ?? undefined,
+            })
+          }
+          if (data.cases_status !== 'idle') {
+            setCasesStatus(data.cases_status)
+            setCases(data.cases)
+            welcomeTurns.push({
+              id: nextId(),
+              who: 'ai',
+              kind: 'cases',
+              text: '',
+              casesStatus: data.cases_status,
+              cases: data.cases ?? undefined,
+            })
+          }
+          if (data.latest_plan) {
+            setSavedPlan(data.latest_plan)
+            setPlanDrafted(true)
+          }
+          setTurns(welcomeTurns)
         }
         setLoading(false)
       } catch {
@@ -172,7 +219,7 @@ export default function ClientWorkspace() {
             text: '',
             milestone: {
               title: 'Interview complete',
-              sub: `All ${data.total_steps} answers in · chapter 1 of 4 complete`,
+              sub: `All ${data.total_steps} answers in · chapter 1 of ${CHAPTER_ORDER.length} complete`,
             },
           })
           appendTurn({
@@ -231,7 +278,7 @@ export default function ClientWorkspace() {
         text: '',
         milestone: {
           title: 'Market intel unlocked',
-          sub: `${data.citations.length} sources read · chapter 2 of 4 complete`,
+          sub: `${data.citations.length} sources read · chapter 2 of ${CHAPTER_ORDER.length} complete`,
         },
       })
     } catch (err) {
@@ -262,7 +309,7 @@ export default function ClientWorkspace() {
           text: '',
           milestone: {
             title: `${data.matches.length} matching cases found`,
-            sub: 'Case match complete · chapter 3 of 4',
+            sub: `Case match complete · chapter 3 of ${CHAPTER_ORDER.length}`,
           },
         })
       }
@@ -274,7 +321,10 @@ export default function ClientWorkspace() {
         prev.map((t) => (t.id === casesTurnId ? { ...t, casesStatus: 'error', casesError: message } : t))
       )
     }
-    setTab('profile')
+    // Deliberately left on the Cases tab (not snapped back to Profile) —
+    // the client just watched the match run live and immediately losing
+    // that tab read as the work disappearing. See handleSelectChapter for
+    // the explicit "Case match" chapter nav that also lands here.
   }, [appendTurn])
 
   // ---- Plan (Phase 4) --------------------------------------------------------
@@ -294,7 +344,7 @@ export default function ClientWorkspace() {
         text: '',
         milestone: {
           title: 'Plan drafted',
-          sub: 'All four chapters complete — save it to keep it',
+          sub: `All ${CHAPTER_ORDER.length} chapters complete — save it to keep it`,
         },
       })
     } catch (err) {
@@ -335,6 +385,53 @@ export default function ClientWorkspace() {
       setSavedPlan({ id: saved.id, version: saved.version })
     } finally {
       setSavingPlanId(null)
+    }
+  }
+
+  // ---- Journey navigation ----------------------------------------------------
+
+  // Jump to the last turn of a given kind — used by handleSelectChapter to
+  // scroll the chat thread to whichever card a chapter click is about.
+  function scrollToLastTurnOfKind(kind: Turn['kind']) {
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      if (turns[i].kind === kind) {
+        turnRefs.current.get(turns[i].id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return true
+      }
+    }
+    return false
+  }
+
+  function handleSelectChapter(id: ChapterId) {
+    setNavRailOpen(false)
+    if (id === 'interview') {
+      setTab('profile')
+      setWorkPanelOpen(true)
+      listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+    if (id === 'market') {
+      setTab('research')
+      setWorkPanelOpen(true)
+      scrollToLastTurnOfKind('research')
+      return
+    }
+    if (id === 'cases') {
+      setTab('cases')
+      setWorkPanelOpen(true)
+      scrollToLastTurnOfKind('cases')
+      return
+    }
+    // plan — no work-panel tab of its own; land on the plan card in the
+    // thread, or the saved/plans list page when there's no card to scroll to
+    // (e.g. right after a reload, where bootstrap doesn't replay the plan
+    // draft turn — see the mount effect's comment on why).
+    if (!scrollToLastTurnOfKind('plan')) {
+      if (savedPlan) {
+        window.location.href = `/w/plans/${savedPlan.id}`
+      } else if (planCount > 0) {
+        window.location.href = '/w/plans'
+      }
     }
   }
 
@@ -426,6 +523,12 @@ export default function ClientWorkspace() {
   const showChips = !!currentStep && !chipsHidden && !intakeCompleted
   const composerDisabled = (!!currentStep && !chipsHidden) || streaming || busy
 
+  // Single fallback for the agent's display name/color — every other spot
+  // that needs them reads from these two, never a separate hardcoded literal.
+  const agentName = agent?.name ?? 'น้องภูมิ'
+  const agentColor = agent?.avatar_color ?? 'var(--accent)'
+  const agentInitial = agentName.trim().slice(0, 1).toUpperCase()
+
   const journey = deriveJourney({
     step,
     totalSteps,
@@ -434,6 +537,8 @@ export default function ClientWorkspace() {
     casesStatus,
     planDrafted,
     savedVersion: savedPlan?.version ?? null,
+    planCount,
+    agentName,
   })
 
   // Real capability counts, not the mockup's hardcoded claim — omit
@@ -450,7 +555,7 @@ export default function ClientWorkspace() {
   const agentSubtitle = agentSubtitleParts.length > 0 ? agentSubtitleParts.join(' · ') : null
 
   return (
-    <div style={{ height: '100vh', overflow: 'hidden', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100dvh', overflow: 'hidden', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
       {/* top bar */}
       <div
         className="client-topbar"
@@ -619,6 +724,7 @@ export default function ClientWorkspace() {
             journey={journey}
             planCount={planCount}
             workspaceName={workspace.name}
+            onSelectChapter={handleSelectChapter}
             onClose={() => setNavRailOpen(false)}
           />
         </div>
@@ -642,7 +748,7 @@ export default function ClientWorkspace() {
                 width: 28,
                 height: 28,
                 borderRadius: '50%',
-                background: 'var(--accent)',
+                background: agentColor,
                 color: '#fff',
                 display: 'grid',
                 placeItems: 'center',
@@ -650,11 +756,11 @@ export default function ClientWorkspace() {
                 fontWeight: 600,
               }}
             >
-              ภ
+              {agentInitial}
             </div>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.25, color: 'var(--ink)' }}>
-                {agent?.name ?? 'น้องภูมิ'} <span style={{ fontWeight: 400, color: 'var(--ink-3)' }}>· Brandbiz strategist</span>
+                {agentName} <span style={{ fontWeight: 400, color: 'var(--ink-3)' }}>· Brandbiz strategist</span>
               </div>
               {agentSubtitle && <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{agentSubtitle}</div>}
             </div>
@@ -665,11 +771,16 @@ export default function ClientWorkspace() {
           <div ref={listRef} className="client-thread" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
             {turns.map((t) => {
               if (t.who === 'sys' && t.milestone) {
-                return <MilestoneTurn key={t.id} title={t.milestone.title} sub={t.milestone.sub} />
+                return (
+                  <div key={t.id} ref={(el) => { if (el) turnRefs.current.set(t.id, el); else turnRefs.current.delete(t.id) }}>
+                    <MilestoneTurn title={t.milestone.title} sub={t.milestone.sub} />
+                  </div>
+                )
               }
               return (
               <div
                 key={t.id}
+                ref={(el) => { if (el) turnRefs.current.set(t.id, el); else turnRefs.current.delete(t.id) }}
                 style={
                   t.who === 'ai'
                     ? { display: 'flex', gap: 11, alignItems: 'flex-start' }
@@ -683,7 +794,7 @@ export default function ClientWorkspace() {
                       height: 28,
                       flex: 'none',
                       borderRadius: '50%',
-                      background: 'var(--accent)',
+                      background: agentColor,
                       color: '#fff',
                       display: 'grid',
                       placeItems: 'center',
@@ -691,7 +802,7 @@ export default function ClientWorkspace() {
                       fontWeight: 600,
                     }}
                   >
-                    ภ
+                    {agentInitial}
                   </div>
                 )}
                 <div
@@ -740,6 +851,7 @@ export default function ClientWorkspace() {
                       savedPlanId={t.savedPlanId}
                       saving={savingPlanId === t.id}
                       onSave={() => t.plan && handleSavePlan(t.id, t.plan)}
+                      agentName={agentName}
                     />
                   )}
                 </div>
@@ -798,7 +910,7 @@ export default function ClientWorkspace() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={handleComposerKey}
-                placeholder={showChips ? 'Or reply directly…' : 'Message น้องภูมิ…'}
+                placeholder={showChips ? 'Or reply directly…' : `Message ${agentName}…`}
                 disabled={composerDisabled}
                 style={{
                   flex: 1,
@@ -867,10 +979,13 @@ export default function ClientWorkspace() {
             tab={tab}
             onTab={setTab}
             fields={fields}
+            intakeFields={intakeFields}
+            agentName={agentName}
             research={research}
             researchStatus={researchStatus}
             cases={cases}
             casesStatus={casesStatus}
+            navigable={journey.navigable}
           />
         </div>
       </div>

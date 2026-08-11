@@ -100,7 +100,7 @@ async def get_conversation(
 
     messages: list[MessageOut] = []
     for row in rows:
-        plaintext = crypto.decrypt(
+        plaintext = crypto.decrypt_message(
             row.content_ciphertext,
             row.content_nonce,
             row.content_tag,

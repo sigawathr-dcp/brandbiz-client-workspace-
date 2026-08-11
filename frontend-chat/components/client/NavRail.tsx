@@ -1,7 +1,7 @@
 'use client'
 
 import { Ic } from '../ui/Icon'
-import type { Journey, JourneyStage } from './journey'
+import type { ChapterId, Journey, JourneyStage } from './journey'
 
 // Client Workspaces redesign (PLAN.md Task 5.10) — the 212px left rail:
 // progress card, "Your journey" stage list, "Rewards" unlock list, a link
@@ -11,11 +11,13 @@ export default function NavRail({
   journey,
   planCount,
   workspaceName,
+  onSelectChapter,
   onClose,
 }: {
   journey: Journey
   planCount: number
   workspaceName: string
+  onSelectChapter: (id: ChapterId) => void
   onClose?: () => void
 }) {
   return (
@@ -27,8 +29,9 @@ export default function NavRail({
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
-        minHeight: 0,
-        height: '100%',
+        // Grow past the wrapper when the journey list is taller than the
+        // viewport — .client-navrail (globals.css) is the scroll container.
+        minHeight: '100%',
       }}
     >
       {onClose && (
@@ -107,7 +110,15 @@ export default function NavRail({
         Your journey
       </div>
       {journey.stages.map((s, i) => (
-        <StageRow key={s.id} stage={s} num={i + 1} />
+        <StageRow
+          key={s.id}
+          stage={s}
+          num={i + 1}
+          onSelect={() => {
+            onSelectChapter(s.id)
+            onClose?.()
+          }}
+        />
       ))}
 
       <div style={{ height: 1, background: 'var(--line)', margin: '8px 4px' }} />
@@ -208,7 +219,7 @@ export default function NavRail({
   )
 }
 
-function StageRow({ stage, num }: { stage: JourneyStage; num: number }) {
+function StageRow({ stage, num, onSelect }: { stage: JourneyStage; num: number; onSelect: () => void }) {
   const dotBase = {
     width: 22,
     height: 22,
@@ -227,17 +238,17 @@ function StageRow({ stage, num }: { stage: JourneyStage; num: number }) {
         ? { ...dotBase, background: 'var(--accent)', color: '#fff', animation: 'glowRing 1.9s ease-in-out infinite' }
         : { ...dotBase, background: 'var(--surface-2)', color: 'var(--ink-4)', border: '1px solid var(--line)' }
 
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 10,
-        alignItems: 'flex-start',
-        padding: '9px 10px',
-        borderRadius: 10,
-        background: stage.state === 'current' ? 'var(--accent-weak)' : 'transparent',
-      }}
-    >
+  const rowStyle = {
+    display: 'flex',
+    gap: 10,
+    alignItems: 'flex-start' as const,
+    padding: '9px 10px',
+    borderRadius: 10,
+    background: stage.state === 'current' ? 'var(--accent-weak)' : 'transparent',
+  }
+
+  const content = (
+    <>
       <div style={dotStyle}>
         {stage.state === 'done' ? (
           <Ic.check size={12} strokeWidth={1.7} />
@@ -262,6 +273,34 @@ function StageRow({ stage, num }: { stage: JourneyStage; num: number }) {
           {stage.note}
         </div>
       </div>
-    </div>
+    </>
+  )
+
+  if (!stage.navigable) {
+    return (
+      <div style={rowStyle} aria-disabled="true">
+        {content}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={stage.state === 'current' ? 'step' : undefined}
+      className="client-navrail-stage"
+      style={{
+        ...rowStyle,
+        width: '100%',
+        border: 'none',
+        background: rowStyle.background,
+        font: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
+      }}
+    >
+      {content}
+    </button>
   )
 }

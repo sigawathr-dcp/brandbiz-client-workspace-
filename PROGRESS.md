@@ -2159,3 +2159,38 @@ Mid-session, `git stash`/`git stash pop` collided with a concurrent session (see
 - [ ] Rebuild+recreate `frontend-chat`/`backend-api` containers and do a real click-through before calling G-A1/G-A2 done end-to-end (per the 2026-08-05 entry's standing rule — this session verified only via `tsc`/pytest-in-a-borrowed-image, not the actual running dev stack)
 - [ ] `alembic upgrade head` still not run for 0044/0045 (plan ratings, from the prior session) against any real database — carried
 - [ ] Carried, untouched this session: everything from every prior entry (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; long-tail backlog)
+
+## 2026-08-10 14:41 — main @ afd0b68
+
+**Summary:** User asked what "required data" the client workspace still needed given visible mockup-looking data; two parallel Explore agents (frontend `components/client/**`, backend routers/PLAN.md) found the workspace is almost entirely DB-backed already — the real gaps were a handful of frontend constants duplicating backend facts, plus D14 (30-day message-content retention), a decision made in PLAN.md's Decisions Log back in Phase 2 but never implemented (flagged as a known gap in the 2026-08-06 server-spec review entry above, still open until now). Closed four of them this session: (1) `GET /client/bootstrap` now serves an ordered `intake_fields` manifest sourced from `client_intake.INTAKE_SCRIPT`, so `WorkPanel.tsx`'s Profile tab and completeness % can no longer desync from the real 8-question script; (2) the workspace agent's fetched `name`/`avatar_color` now flows into every component that previously hardcoded "น้องภูมิ" and a fixed avatar glyph/color (`ClientWorkspace`, `WorkPanel`, `journey.ts`, `PlanDraftCard`, `PlanDocument`, `PlanRating`, `PlansListPage` — left `RedeemInvite`'s pre-auth loading screen on the generic fallback, since no agent data exists before an invite is redeemed and adding an unauthenticated lookup for a sub-second spinner wasn't worth the new attack surface); (3) hardcoded "chapter N of 4" milestone text and a `useState(8)` intake-length default were replaced with `journey.CHAPTER_ORDER.length` and a zero-then-hydrate default; (4) implemented D14 for real — `messages.content_ciphertext/nonce/tag` are now nullable, `app/services/retention.py::purge_expired_messages()` nulls them (row + metadata kept) past the cutoff, a new `crypto.decrypt_message()` helper returns a readable placeholder instead of crashing at the 4 read sites (`conversations.py`, `chat_policy.py`'s history loader, `agent_tasks.py`, `reveal.py`'s one-time view), and `backend/scripts/purge_expired_messages.py` is the cron/Task-Scheduler entrypoint (no Celery worker runs in this repo despite the aspirational tree in PLAN.md, so a standalone script matches `eval_case_match_run.py`'s existing pattern rather than adding an in-process loop that would double-run under multiple app workers).
+
+**Files changed:**
+- `backend/app/services/client_intake.py` — new `field_manifest()`
+- `backend/app/routers/client.py` — `BootstrapOut.intake_fields`; `PlanOut.agent_name` threaded through `save_plan`/`list_plans`/`get_plan`
+- `backend/app/crypto.py` — new `PURGED_PLACEHOLDER`, `decrypt_message()`
+- `backend/app/models/message.py` — `content_ciphertext`/`content_nonce`/`content_tag` now nullable; new `content_purged_at`
+- `backend/app/models/audit.py` — new `messages_purged` audit_action enum value (via migration, see below)
+- `backend/app/services/retention.py` — new; `purge_expired_messages()`, `count_pending_purge()`
+- `backend/app/routers/conversations.py`, `backend/app/services/{chat_policy,agent_tasks,reveal}.py` — switched message-content reads from `crypto.decrypt` to `crypto.decrypt_message`
+- `backend/alembic/versions/0047_message_retention.py` — new; nullable columns + `content_purged_at` + `messages_purged` enum value
+- `backend/scripts/purge_expired_messages.py` — new; `--dry-run`/`--retention-days` CLI entrypoint
+- `backend/tests/unit/test_retention.py` — new; 3 tests (audit-on-purge, no-audit-when-nothing-purged, dry-run count)
+- `backend/tests/unit/test_crypto.py` — 2 new tests for `decrypt_message`
+- `backend/tests/unit/test_client_intake.py` — new `TestFieldManifest` class, 2 tests
+- `frontend-chat/components/client/types.ts` — new `IntakeField`; `BootstrapData.intake_fields`; `SavedPlan.agent_name`
+- `frontend-chat/components/client/WorkPanel.tsx` — dropped local `FIELD_LABELS`/`FIELD_ORDER`, takes `intakeFields`/`agentName` props
+- `frontend-chat/components/client/journey.ts` — new exported `CHAPTER_ORDER`; `JourneyInput.agentName` threaded into retry copy
+- `frontend-chat/components/client/ClientWorkspace.tsx` — `agentName`/`agentColor`/`agentInitial` derived once and passed down; `totalSteps` default `8`→`0`; milestone "of 4" literals → `CHAPTER_ORDER.length`
+- `frontend-chat/components/client/{PlanDraftCard,PlanDocument,PlanRating,PlansListPage}.tsx` — accept/use `agentName` instead of a hardcoded literal
+
+**Verification:** Backend: `uv sync --extra external` then `uv run pytest tests/unit` — 750 passed, 33 failed, 3 skipped; diffed against a `git stash`-restored clean-HEAD baseline run of the same command (741 passed, 38 failed) and confirmed every failure category (AESGCM key env-var test-isolation issue, `app.workers.audit_writer` AttributeError, a `test_consent.py` TypeError, 2 `test_google_llm.py` regex assertions) already exists on clean HEAD — this session introduced zero new failures, and all of this session's own new/extended tests (`test_retention.py`, the 2 new `test_crypto.py` cases, `TestFieldManifest`) pass. Frontend: `npm run build` — compiled successfully, type-checked clean, all `/w`, `/w/plans`, `/w/plans/[id]`, `/try/[token]`, `/p/[token]` routes present in the output. No live browser walkthrough (matches the standing gap noted in every prior entry — this dev environment's containers have no source mount).
+
+**Next steps:**
+- [ ] New: `alembic upgrade head` for migration 0047 not run against any real database this session — same standing gap as 0044/0045 in the 2026-08-09 22:38 entry, now three migrations deep
+- [ ] New: no scheduler (cron / Windows Task Scheduler) actually wired up to run `backend/scripts/purge_expired_messages.py` daily — the script exists and is tested at the service-function level, but nothing invokes it yet in any environment
+- [ ] New: `RedeemInvite.tsx`'s pre-redeem loading screen still says "น้องภูมิ" unconditionally (no agent data exists before redemption) — left as a deliberate scope cut this session, revisit if a workspace's real agent is ever renamed away from that name before an event
+- [ ] Continue the plan: Commit 2 (server-side user-preferences endpoint), Commit 3 (G-A4 Prompt Assistant), Commit 4 (G-A3 Arena mode) — carried from 2026-08-09 23:41, untouched this session
+- [ ] Amend PLAN.md §7.4 ("first token <2s") — carried, untouched
+- [ ] Rebuild+recreate `frontend-chat`/`backend-api` containers and do a real click-through — carried, untouched; now also covers this session's retention/agent-identity/field-manifest changes
+- [ ] `alembic upgrade head` still not run for 0044/0045 — carried (see 0047 note above, now grouped)
+- [ ] Carried, untouched this session: everything from every prior entry (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; long-tail backlog)
