@@ -8,12 +8,34 @@ import type { SavedPlan } from './types'
 // 30-day messages.content_* retention wipe (D14) — see app/models/plan.py.
 export default function PlansListPage() {
   const [plans, setPlans] = useState<SavedPlan[] | null>(null)
+  // Task 5.12 — which plan the chat (/w) would revise next, so this list
+  // and the chat agree. Stored per-workspace by ClientWorkspace.tsx as
+  // `bb:activePlan:<workspaceId>`; this page doesn't otherwise know its
+  // workspace id (GET /client/plans doesn't return one), so it scans for
+  // any such key — safe because the pill only renders when the stored id
+  // actually matches one of THIS workspace's plans below.
+  const [activePlanId, setActivePlanId] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/client/plans', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : []))
       .then(setPlans)
       .catch(() => setPlans([]))
+
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i)
+        if (key?.startsWith('bb:activePlan:')) {
+          const value = localStorage.getItem(key)
+          if (value) {
+            setActivePlanId(value)
+            break
+          }
+        }
+      }
+    } catch {
+      // localStorage unavailable — no pill, not fatal
+    }
   }, [])
 
   return (
@@ -63,6 +85,20 @@ export default function PlansListPage() {
                   >
                     v{p.version} · {p.status}
                   </span>
+                  {p.id === activePlanId && (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 500,
+                        color: 'var(--accent)',
+                        background: 'var(--accent-weak)',
+                        borderRadius: 99,
+                        padding: '2px 8px',
+                      }}
+                    >
+                      Active
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>{p.core_idea}</div>
                 {p.budget && (

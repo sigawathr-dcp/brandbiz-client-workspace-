@@ -32,10 +32,25 @@ Industry-neutral, same as the questions.
 
 After the last step, INTAKE_COMPLETE_MESSAGE is shown once, then the
 frontend calls POST /client/research (see app/routers/client.py).
+
+DB redesign note: INTAKE_SCRIPT below stays as the SEED literal — migration
+0052 reads it once to populate intake_scripts/intake_questions/
+intake_options, which is what the running app actually reads from
+(*_db functions at the bottom of this module). Nothing at request time
+reads INTAKE_SCRIPT directly anymore except the eval harness
+(app/eval/goldens.py, query_variants.py), which deliberately stays
+decoupled from real client data.
 """
 from __future__ import annotations
 
+import uuid
 from typing import TypedDict
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.intake import IntakeOption as IntakeOptionRow
+from app.models.intake import IntakeQuestion as IntakeQuestionRow
 
 
 class IntakeOption(TypedDict):
@@ -170,13 +185,19 @@ def total_steps() -> int:
     return len(INTAKE_SCRIPT)
 
 
-def field_manifest() -> list[dict[str, str]]:
-    """Ordered [{key, label}] for every intake field — the display contract
-    for the frontend Profile tab (WorkPanel.tsx), served on GET
+def field_manifest() -> list[dict]:
+    """Ordered [{key, label, options}] for every intake field — the display
+    contract for the frontend Profile tab (WorkPanel.tsx), served on GET
     /client/bootstrap so adding/renaming a step here can never desync the
-    frontend's field list or its completeness math."""
+    frontend's field list or its completeness math. `options` (each
+    {index, label}) lets the Profile tab's edit mode render the same chips
+    the intake used, rather than keeping its own copy of the script."""
     return [
-        {"key": step["field"], "label": FIELD_LABELS.get(step["field"], step["field"])}
+        {
+            "key": step["field"],
+            "label": FIELD_LABELS.get(step["field"], step["field"]),
+            "options": [{"index": i, "label": o["label"]} for i, o in enumerate(step["options"])],
+        }
         for step in INTAKE_SCRIPT
     ]
 
@@ -185,6 +206,96 @@ def step_at(index: int) -> IntakeStep | None:
     """Return the step at `index`, or None once intake is complete."""
     if 0 <= index < len(INTAKE_SCRIPT):
         return INTAKE_SCRIPT[index]
+    return None
+
+
+def index_of_field(field: str) -> int | None:
+    """Resolve a field key to its position in INTAKE_SCRIPT — used by the
+    profile-edit endpoint to check "has this question already been
+    answered" (idx < profile.step) without duplicating the script order."""
+    for i, step in enumerate(INTAKE_SCRIPT):
+        if step["field"] == field:
+            return i
+    return None
+
+
+async def total_steps_db(session: AsyncSession, script_id: uuid.UUID) -> int:
+    result = await session.execute(
+        select(func.count()).select_from(IntakeQuestionRow).where(IntakeQuestionRow.script_id == script_id)
+    )
+    return result.scalar_one()
+
+
+async def _questions(session: AsyncSession, script_id: uuid.UUID) -> list[IntakeQuestionRow]:
+    result = await session.execute(
+        select(IntakeQuestionRow).where(IntakeQuestionRow.script_id == script_id).order_by(IntakeQuestionRow.ordinal)
+    )
+    return list(result.scalars().all())
+
+
+async def field_manifest_db(session: AsyncSession, script_id: uuid.UUID) -> list[dict]:
+    """DB-backed replacement for field_manifest() — ordered
+    [{key, label, options}] for every intake field, read from the script
+    an engagement was actually given (engagements.intake_script_id) rather
+    than the live Python literal, so a republished script never changes
+    what an in-progress engagement's Profile tab renders."""
+    questions = await _questions(session, script_id)
+    out = []
+    for q in questions:
+        opt_result = await session.execute(
+            select(IntakeOptionRow).where(IntakeOptionRow.question_id == q.id).order_by(IntakeOptionRow.ordinal)
+        )
+        options = list(opt_result.scalars().all())
+        out.append({
+            "key": q.field_key,
+            "label": FIELD_LABELS.get(q.field_key, q.field_key),
+            "options": [{"index": i, "label": o.label} for i, o in enumerate(options)],
+        })
+    return out
+
+
+async def step_at_db(session: AsyncSession, script_id: uuid.UUID, index: int) -> IntakeStep | None:
+    """DB-backed replacement for step_at() — returns the same IntakeStep
+    shape (field/question/options/insight) so resolve_answer() and the
+    router's response builders are unchanged."""
+    questions = await _questions(session, script_id)
+    if not (0 <= index < len(questions)):
+        return None
+    q = questions[index]
+    opt_result = await session.execute(
+        select(IntakeOptionRow).where(IntakeOptionRow.question_id == q.id).order_by(IntakeOptionRow.ordinal)
+    )
+    options = list(opt_result.scalars().all())
+    return {
+        "field": q.field_key,
+        "question": q.prompt,
+        "options": [{"label": o.label, "value": o.value} for o in options],
+        "insight": q.insight or "",
+    }
+
+
+async def option_id_at_db(session: AsyncSession, question_id: uuid.UUID, option_index: int) -> uuid.UUID | None:
+    result = await session.execute(
+        select(IntakeOptionRow.id).where(IntakeOptionRow.question_id == question_id).order_by(IntakeOptionRow.ordinal)
+    )
+    options = list(result.scalars().all())
+    if not (0 <= option_index < len(options)):
+        return None
+    return options[option_index]
+
+
+async def question_id_at_db(session: AsyncSession, script_id: uuid.UUID, index: int) -> uuid.UUID | None:
+    questions = await _questions(session, script_id)
+    if not (0 <= index < len(questions)):
+        return None
+    return questions[index].id
+
+
+async def index_of_field_db(session: AsyncSession, script_id: uuid.UUID, field: str) -> int | None:
+    questions = await _questions(session, script_id)
+    for i, q in enumerate(questions):
+        if q.field_key == field:
+            return i
     return None
 
 

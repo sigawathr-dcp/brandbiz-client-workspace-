@@ -13,6 +13,7 @@ import NavRail from './NavRail'
 import PlanDraftCard from './PlanDraftCard'
 import ResearchStepper from './ResearchStepper'
 import WorkPanel, { WorkTab } from './WorkPanel'
+import { MarkdownContent } from '@/components/ui/Markdown'
 import type {
   BootstrapData,
   CasesResult,
@@ -21,6 +22,7 @@ import type {
   DraftPlan,
   IntakeAnswerResponse,
   IntakeField,
+  PlanSummary,
   ResearchResult,
   Turn,
 } from './types'
@@ -64,10 +66,18 @@ export default function ClientWorkspace() {
   const [casesStatus, setCasesStatus] = useState<'idle' | 'pending' | 'done' | 'error'>('idle')
   const [tab, setTab] = useState<WorkTab>('profile')
 
-  const [planCount, setPlanCount] = useState(0)
   const [planDrafted, setPlanDrafted] = useState(false)
-  const [savedPlan, setSavedPlan] = useState<{ id: string; version: number } | null>(null)
+  // Task 5.12 — a seat can hold several plans (POST /client/plans always
+  // creates a new one). `plans` is the full list (newest first, from
+  // bootstrap or upserted on save); `activePlanId` is which one a "Save as
+  // vN" revision targets and which the switcher checkmarks — DB redesign:
+  // this is engagements.active_plan_id server-side now (POST /client/
+  // plans/{id}/activate), not a per-device localStorage preference.
+  const [plans, setPlans] = useState<PlanSummary[]>([])
+  const [activePlanId, setActivePlanId] = useState<string | null>(null)
+  const [planSwitcherOpen, setPlanSwitcherOpen] = useState(false)
   const [savingPlanId, setSavingPlanId] = useState<string | null>(null)
+  const [savingProfile, setSavingProfile] = useState(false)
   const [workPanelOpen, setWorkPanelOpen] = useState(false)
   const [navRailOpen, setNavRailOpen] = useState(false)
 
@@ -114,9 +124,17 @@ export default function ClientWorkspace() {
         setFields(data.fields)
         setIntakeFields(data.intake_fields ?? [])
         setIntakeCompleted(data.completed)
-        setPlanCount(data.plan_count)
         setStep(data.step)
         setTotalSteps(data.total_steps)
+        setPlans(data.plans)
+        if (data.plans.length > 0) {
+          // DB redesign — the server (engagements.active_plan_id) is now
+          // the source of truth for which plan a revision targets, not a
+          // per-device localStorage guess: a second device revising this
+          // engagement now sees and affects the same plan.
+          const initial = data.plans.find((p) => p.id === data.active_plan_id) ?? data.plans[0]
+          setActivePlanId(initial.id)
+        }
 
         if (!data.completed && data.current_step) {
           setTurns([{ id: nextId(), who: 'ai', kind: 'text', text: data.current_step.question }])
@@ -130,6 +148,11 @@ export default function ClientWorkspace() {
           // the plan body — see PlanOut.provenance et al on GET
           // /client/plans/{id}); handleSelectChapter routes to /w/plans/{id}
           // instead when there's no in-thread card to scroll to.
+          //
+          // Deliberately NOT forcing planDrafted=true here (Task 5.11 used
+          // to): that permanently hid "Draft my plan" after any reload, so
+          // a returning client could never draft plan #2. plans/activePlanId
+          // above are enough for the journey/plan chapter to read "done".
           const welcomeTurns: Turn[] = [
             {
               id: nextId(),
@@ -161,10 +184,6 @@ export default function ClientWorkspace() {
               casesStatus: data.cases_status,
               cases: data.cases ?? undefined,
             })
-          }
-          if (data.latest_plan) {
-            setSavedPlan(data.latest_plan)
-            setPlanDrafted(true)
           }
           setTurns(welcomeTurns)
         }
@@ -210,6 +229,11 @@ export default function ClientWorkspace() {
         const data: IntakeAnswerResponse = await res.json()
         setStep(data.step)
         setTotalSteps(data.total_steps)
+        // Canonical, server-resolved fields — replaces the optimistic guess
+        // handlePickChip used to make (which stored the Thai chip LABEL
+        // while the server stores the English option VALUE) and fixes the
+        // free-text path, which never updated the Profile tab at all.
+        setFields(data.fields)
         if (data.completed) {
           setCurrentStep(null)
           setIntakeCompleted(true)
@@ -248,8 +272,9 @@ export default function ClientWorkspace() {
   )
 
   function handlePickChip(chip: Chip) {
+    // No optimistic setFields here — answerIntake() replaces `fields` from
+    // the server's canonical response once it lands (see its comment).
     void answerIntake({ option_index: chip.index }, chip.label)
-    setFields((prev) => (currentStep ? { ...prev, [currentStep.field]: chip.label } : prev))
   }
 
   function handleSkipChips() {
@@ -329,8 +354,8 @@ export default function ClientWorkspace() {
 
   // ---- Plan (Phase 4) --------------------------------------------------------
 
-  const runDraftPlan = useCallback(async () => {
-    if (planDrafted) return
+  const runDraftPlan = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
+    if (planDrafted && !force) return
     setPlanDrafted(true)
     const planTurnId = appendTurn({ who: 'ai', kind: 'plan', text: '', planStatus: 'pending' })
     try {
@@ -357,11 +382,16 @@ export default function ClientWorkspace() {
     }
   }, [appendTurn, planDrafted])
 
-  async function handleSavePlan(turnId: string, plan: DraftPlan) {
+  async function handleSavePlan(turnId: string, plan: DraftPlan, mode: 'revise' | 'new') {
     setSavingPlanId(turnId)
+    setTurns((prev) => prev.map((t) => (t.id === turnId ? { ...t, planSaveError: undefined } : t)))
+    // 'revise' only actually revises when there IS an active plan to PUT
+    // onto — PlanDraftCard only offers that mode when one exists, but stay
+    // defensive here rather than PUTting to a stale/absent id.
+    const revising = mode === 'revise' && !!activePlanId
     try {
-      const res = await fetch('/api/client/plans', {
-        method: 'POST',
+      const res = await fetch(revising ? `/api/client/plans/${activePlanId}` : '/api/client/plans', {
+        method: revising ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
@@ -377,14 +407,73 @@ export default function ClientWorkspace() {
       if (!res.ok) {
         const detail = await errorDetail(res, 'Could not save plan')
         console.error('[plans/save]', detail)
+        setTurns((prev) => prev.map((t) => (t.id === turnId ? { ...t, planSaveError: detail } : t)))
         return
       }
-      const saved = await res.json()
+      const saved: { id: string; title: string; version: number } = await res.json()
       setTurns((prev) => prev.map((t) => (t.id === turnId ? { ...t, planSaved: true, savedPlanId: saved.id } : t)))
-      setPlanCount((c) => c + 1)
-      setSavedPlan({ id: saved.id, version: saved.version })
+      setPlans((prev) => {
+        const summary: PlanSummary = { id: saved.id, title: saved.title, version: saved.version }
+        const idx = prev.findIndex((p) => p.id === saved.id)
+        if (idx === -1) return [summary, ...prev]
+        const next = [...prev]
+        next[idx] = summary
+        return next
+      })
+      setActivePlanId(saved.id)
+      // The backend's save_plan() already stamps engagements.active_plan_id
+      // when this was a "Save as a new plan" (mode 'new'); for a revision
+      // (mode 'revise') the active plan doesn't change, so no extra call
+      // is needed either way — see app/services/plan.py::save_plan.
+    } catch {
+      setTurns((prev) => prev.map((t) => (t.id === turnId ? { ...t, planSaveError: 'Network error — please try again.' } : t)))
     } finally {
       setSavingPlanId(null)
+    }
+  }
+
+  // ---- Profile edit -> resubmit (Task 5.11) ----------------------------------
+
+  async function handleSaveProfile(
+    updates: { field: string; option_index?: number; free_text?: string }[]
+  ) {
+    if (updates.length === 0 || savingProfile) return
+    setSavingProfile(true)
+    try {
+      const res = await fetch('/api/client/intake/fields', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ updates }),
+      })
+      if (!res.ok) {
+        console.error('[intake/fields]', await errorDetail(res, 'Could not save your profile'))
+        return
+      }
+      const data: { fields: Record<string, string>; changed: string[]; completed: boolean } = await res.json()
+      setFields(data.fields)
+      if (data.changed.length === 0) return // nothing actually changed — no pipeline to re-run
+
+      if (!data.completed) return // still mid-intake — the chat just continues at the current question
+
+      // Intake was already complete, so research/cases/plan were built on
+      // the OLD answers — re-run the whole pipeline so the plan the client
+      // walks away with matches what they just corrected.
+      appendTurn({
+        who: 'sys',
+        kind: 'milestone',
+        text: '',
+        milestone: { title: 'Profile updated', sub: 're-running your market scan and plan…' },
+      })
+      setResearchStatus('idle')
+      setCasesStatus('idle')
+      setPlanDrafted(false)
+      await runResearchThenCases()
+      await runDraftPlan({ force: true })
+    } catch {
+      console.error('[intake/fields] network error')
+    } finally {
+      setSavingProfile(false)
     }
   }
 
@@ -427,9 +516,9 @@ export default function ClientWorkspace() {
     // (e.g. right after a reload, where bootstrap doesn't replay the plan
     // draft turn — see the mount effect's comment on why).
     if (!scrollToLastTurnOfKind('plan')) {
-      if (savedPlan) {
-        window.location.href = `/w/plans/${savedPlan.id}`
-      } else if (planCount > 0) {
+      if (activePlanId) {
+        window.location.href = `/w/plans/${activePlanId}`
+      } else if (plans.length > 0) {
         window.location.href = '/w/plans'
       }
     }
@@ -528,6 +617,7 @@ export default function ClientWorkspace() {
   const agentName = agent?.name ?? 'น้องภูมิ'
   const agentColor = agent?.avatar_color ?? 'var(--accent)'
   const agentInitial = agentName.trim().slice(0, 1).toUpperCase()
+  const activePlan = plans.find((p) => p.id === activePlanId) ?? null
 
   const journey = deriveJourney({
     step,
@@ -536,8 +626,8 @@ export default function ClientWorkspace() {
     researchStatus,
     casesStatus,
     planDrafted,
-    savedVersion: savedPlan?.version ?? null,
-    planCount,
+    savedVersion: activePlan?.version ?? null,
+    planCount: plans.length,
     agentName,
   })
 
@@ -691,38 +781,143 @@ export default function ClientWorkspace() {
         >
           Profile
         </button>
-        <a
-          href="/w/plans"
-          style={{
-            fontSize: 12.5,
-            fontWeight: 500,
-            color: planCount > 0 ? 'var(--accent)' : 'var(--ink-4)',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          My plans
-          <span
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => {
+              if (plans.length === 0) {
+                window.location.href = '/w/plans'
+                return
+              }
+              setPlanSwitcherOpen((open) => !open)
+            }}
             style={{
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-              background: 'var(--surface-2)',
-              borderRadius: 99,
-              padding: '1px 7px',
+              fontSize: 12.5,
+              fontWeight: 500,
+              color: plans.length > 0 ? 'var(--accent)' : 'var(--ink-4)',
+              background: 'none',
+              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              cursor: 'pointer',
+              padding: 0,
             }}
           >
-            {planCount}
-          </span>
-        </a>
+            My plans
+            <span
+              style={{
+                fontSize: 11,
+                fontFamily: 'var(--font-mono)',
+                background: 'var(--surface-2)',
+                borderRadius: 99,
+                padding: '1px 7px',
+              }}
+            >
+              {plans.length}
+            </span>
+          </button>
+          {planSwitcherOpen && plans.length > 0 && (
+            <>
+              <div
+                onClick={() => setPlanSwitcherOpen(false)}
+                style={{ position: 'fixed', inset: 0, zIndex: 20 }}
+              />
+              <div
+                className="client-plan-switcher"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  right: 0,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 10,
+                  boxShadow: 'var(--shadow-2, var(--shadow-1))',
+                  overflow: 'hidden',
+                  zIndex: 21,
+                }}
+              >
+                <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                  {plans.map((p) => (
+                    <div
+                      key={p.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '9px 12px',
+                        borderBottom: '1px solid var(--line)',
+                        background: p.id === activePlanId ? 'var(--surface-2)' : 'transparent',
+                      }}
+                    >
+                      <button
+                        onClick={() => {
+                          setActivePlanId(p.id)
+                          setPlanSwitcherOpen(false)
+                          // Server-side now, not localStorage — best-effort;
+                          // a failed call just means the pick doesn't
+                          // survive a reload, same degradation the old
+                          // localStorage fallback had in private mode.
+                          fetch(`/api/client/plans/${p.id}/activate`, { method: 'POST', credentials: 'include' }).catch(
+                            () => {}
+                          )
+                        }}
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 7,
+                          background: 'none',
+                          border: 'none',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          padding: 0,
+                        }}
+                      >
+                        <span style={{ width: 12, flex: 'none', fontSize: 12, color: 'var(--accent)' }}>
+                          {p.id === activePlanId ? '✓' : ''}
+                        </span>
+                        <span style={{ minWidth: 0, flex: 1, fontSize: 13, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {p.title}
+                        </span>
+                        <span style={{ flex: 'none', fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--ink-3)' }}>
+                          v{p.version}
+                        </span>
+                      </button>
+                      <a
+                        href={`/w/plans/${p.id}`}
+                        aria-label={`Open ${p.title}`}
+                        style={{ flex: 'none', color: 'var(--ink-3)', textDecoration: 'none', fontSize: 13 }}
+                      >
+                        ↗
+                      </a>
+                    </div>
+                  ))}
+                </div>
+                <a
+                  href="/w/plans"
+                  style={{
+                    display: 'block',
+                    padding: '9px 12px',
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    color: 'var(--accent)',
+                    textDecoration: 'none',
+                  }}
+                >
+                  View all plans →
+                </a>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="client-grid" style={{ flex: 1, display: 'grid', minHeight: 0 }}>
         <div className={`client-navrail${navRailOpen ? ' open' : ''}`}>
           <NavRail
             journey={journey}
-            planCount={planCount}
+            planCount={plans.length}
             workspaceName={workspace.name}
             onSelectChapter={handleSelectChapter}
             onClose={() => setNavRailOpen(false)}
@@ -821,10 +1016,14 @@ export default function ClientWorkspace() {
                   }
                 >
                   {t.insight && <InsightCallout text={t.insight} />}
-                  <div style={{ whiteSpace: 'pre-wrap' }}>
-                    {t.text}
-                    {t.streaming && <span style={{ color: 'var(--accent)' }}>▍</span>}
-                  </div>
+                  {t.who === 'ai' && !t.streaming ? (
+                    <MarkdownContent text={t.text} />
+                  ) : (
+                    <div style={{ whiteSpace: 'pre-wrap' }}>
+                      {t.text}
+                      {t.streaming && <span style={{ color: 'var(--accent)' }}>▍</span>}
+                    </div>
+                  )}
                   {t.kind === 'research' && (
                     <ResearchStepper
                       status={t.researchStatus ?? 'pending'}
@@ -850,8 +1049,14 @@ export default function ClientWorkspace() {
                       saved={t.planSaved}
                       savedPlanId={t.savedPlanId}
                       saving={savingPlanId === t.id}
-                      onSave={() => t.plan && handleSavePlan(t.id, t.plan)}
+                      saveError={t.planSaveError}
+                      onSave={(mode) => t.plan && handleSavePlan(t.id, t.plan, mode)}
                       agentName={agentName}
+                      activePlan={
+                        !t.planSaved && activePlan
+                          ? { title: activePlan.title, nextVersion: activePlan.version + 1 }
+                          : undefined
+                      }
                     />
                   )}
                 </div>
@@ -880,7 +1085,7 @@ export default function ClientWorkspace() {
                     boxShadow: 'var(--shadow-1)',
                   }}
                 >
-                  ทำเป็นแผนพร้อมงบประมาณให้เลยครับ · Draft my plan
+                  ทำเป็นแผนพร้อมงบประมาณให้เลยครับ · {plans.length > 0 ? 'Draft another plan' : 'Draft my plan'}
                 </button>
               </div>
             )}
@@ -986,6 +1191,8 @@ export default function ClientWorkspace() {
             cases={cases}
             casesStatus={casesStatus}
             navigable={journey.navigable}
+            onSaveProfile={handleSaveProfile}
+            savingProfile={savingProfile}
           />
         </div>
       </div>

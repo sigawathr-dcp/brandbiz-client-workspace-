@@ -188,6 +188,43 @@ th {
 td { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
 tr:hover td { background: var(--surface-2); }
 
+/* Markdown tables (components/ui/Markdown.tsx). Scoped overrides — the bare
+   table/th/td rules above are global and would otherwise leak a row-hover
+   highlight and their own font sizing into chat messages. Keep the 768px
+   breakpoint here in sync with --bp-mobile (see the note further down this
+   file — a custom property can't be used inside a @media condition). */
+.md-table-wrap { overflow-x: auto; margin: 8px 0; }
+.md-table { width: 100%; border-collapse: collapse; min-width: 460px; }
+.md-table th {
+  text-align: left; color: var(--ink-3); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line-2);
+}
+.md-table td {
+  padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line);
+  font-size: 13px; line-height: 1.55; color: var(--ink-2); vertical-align: top;
+}
+.md-table th:last-child, .md-table td:last-child { padding-right: 0; }
+.md-table tr:hover td { background: transparent; }
+
+@media (max-width: 768px) {
+  .md-table-wrap { overflow-x: visible; }
+  .md-table, .md-table tbody, .md-table tr, .md-table td { display: block; }
+  .md-table { min-width: 0; }
+  .md-table thead { display: none; }
+  .md-table tr {
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: 10px 12px; margin-bottom: 8px; background: var(--surface);
+  }
+  .md-table td { border-bottom: none; padding: 5px 0; }
+  .md-table td::before {
+    content: attr(data-label);
+    display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: var(--ink-3); margin-bottom: 2px;
+  }
+  .md-table td[data-label=""]::before { display: none; }
+}
+
 /* Role / status badges */
 .badge {
   display: inline-block;
@@ -428,6 +465,15 @@ tr:hover td { background: var(--surface-2); }
  * rule below), so it lives here per the class-for-@media convention. */
 .client-nps-grid {
   grid-template-columns: repeat(10, 1fr);
+}
+
+/* ClientWorkspace.tsx's "My plans" switcher popover (Task 5.12) — 280px,
+ * capped against the viewport so it can't overflow off-screen on a narrow
+ * phone where the topbar wraps (max-width instead of a breakpoint swap,
+ * since nothing here needs to change shape, just stop clipping). */
+.client-plan-switcher {
+  width: 280px;
+  max-width: calc(100vw - 24px);
 }
 
 /* Above 768px but below 1180px, the rail (212px) + work panel (372px) chrome

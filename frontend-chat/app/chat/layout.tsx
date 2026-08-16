@@ -104,7 +104,11 @@ async function ChatSidebar({ token }: { token: string }) {
   } catch (err: unknown) {
     const status = (err as { status?: number }).status
     if (status === 401) {
-      redirect('/login')
+      // Token was present but the backend rejected it (expired/stale) —
+      // route through /api/session-expired to clear the cookie first, or
+      // middleware.ts (which only checks cookie presence) bounces straight
+      // back here forever. See that route's comment for the full loop.
+      redirect('/api/session-expired')
     }
     throw err
   }
@@ -120,7 +124,11 @@ async function GatedMain({ token, children }: { token: string; children: React.R
   } catch (err: unknown) {
     const status = (err as { status?: number }).status
     if (status === 401) {
-      redirect('/login')
+      // Token was present but the backend rejected it (expired/stale) —
+      // route through /api/session-expired to clear the cookie first, or
+      // middleware.ts (which only checks cookie presence) bounces straight
+      // back here forever. See that route's comment for the full loop.
+      redirect('/api/session-expired')
     }
     // Network / 5xx: backend unreachable. Re-throw so Next.js error.tsx
     // (or the default error boundary) shows "Something went wrong" rather

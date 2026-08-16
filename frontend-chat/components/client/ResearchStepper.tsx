@@ -1,5 +1,7 @@
 'use client'
 
+import { MarkdownContent } from '@/components/ui/Markdown'
+import { findingsToMarkdown } from './researchMarkdown'
 import type { ResearchResult } from './types'
 
 // Client Workspaces (Phase 5, D21/D22) — the "External market scan · IAG"
@@ -100,11 +102,11 @@ export default function ResearchStepper({
             gap: 8,
           }}
         >
-          {result.findings.map((f, i) => (
-            <div key={i} style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--ink-2)' }}>
-              {f.text}
+          {result.findings.length > 0 && (
+            <div style={{ fontSize: 13.5, lineHeight: 1.6, color: 'var(--ink-2)' }}>
+              <MarkdownContent text={findingsToMarkdown(result.findings)} />
             </div>
-          ))}
+          )}
           {result.citations.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
               {result.citations.map((c) => (

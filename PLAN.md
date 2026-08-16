@@ -1177,6 +1177,64 @@ section tracks task-level progress per the usual PLAN.md convention.
       identically (pre-existing, not a regression); needs verification in the project's real
       dev/CI environment.
 
+- ☑ 5.11 Editable company profile → resubmit for a revised plan — the Profile tab (`WorkPanel.tsx`)
+      was strictly read-only; a client who mistyped an intake answer had no way to correct it. Adds
+      `PATCH /client/intake/fields` (correct one or more already-answered fields; only fields already
+      reached — `idx < profile.step` — are editable, so this can never skip ahead of the scripted
+      intake; per-user rate limited via a new `rate_limit.check()` helper, not IP-keyed, since D23
+      puts every booth attendee behind one shared NAT IP) and `PUT /client/plans/{id}`
+      (`plan_svc.revise_plan`, bumping `Plan.version`/appending a `PlanVersion` row on the *same*
+      plan — the `plan_updated` audit action and `plan_versions` schema already existed for this,
+      unused since 5.4). `plan.status` is never touched by a revision — stays `"draft · awaiting
+      expert review"` per the liability-control note below. Saving a profile edit while intake is
+      already complete re-runs the full research → case-match → draft pipeline (both already
+      idempotent: `/research` is latest-wins, `/cases` already delete-and-replaces per conversation)
+      so the plan a client walks away with never cites stale market data. New audit action
+      `intake_edited` (migration `0048`, mirrored in `app/models/audit.py` and
+      `tests/integration/conftest.py` per the enum-sync test). Also fixed two pre-existing bugs the
+      edit form would otherwise have inherited: chip answers optimistically wrote the Thai chip
+      label into `fields` state while the backend stores the English option value, and free-text
+      answers never updated `fields` at all — both replaced by trusting the new canonical
+      `fields` the backend now returns from `POST /client/intake/answer` and
+      `PATCH /client/intake/fields`. Backend unit tests green (4 new intake-edit tests, 4 new
+      plan-revise tests, `field_manifest()`/`index_of_field` coverage extended); the 33 pre-existing
+      failures are the same host-env `ENCRYPTION_KEY`-length / SDK-stub gaps documented under 5.9/5.10,
+      confirmed unrelated (none of the failing files were touched). Frontend type-checks clean
+      (`tsc --noEmit`). No manual browser click-through in this session — see PROGRESS.md.
+
+- ☑ 5.12 Switch between plans, and between a plan's versions — 5.11's revise-in-place made a
+      workspace hold exactly one plan forever (`ClientWorkspace.tsx`'s `revising = !!savedPlan` PUT
+      every subsequent save; bootstrap forced `planDrafted=true` on reload, permanently hiding
+      "Draft my plan"), even though `plans` has no unique constraint on `(workspace_id, user_id)` and
+      `POST /client/plans` already creates a fresh row — only the frontend forced single-plan
+      behavior. Now a seat can hold several plans: `BootstrapOut.plans` (replacing the old
+      `latest_plan`) lists all of them; a top-bar switcher popover picks which one is "active" (a
+      per-device `localStorage` preference, not schema — no server column needed); the draft card
+      asks each time — **Save as vN of "…"** (`PUT /client/plans/{id}` → `plan_svc.revise_plan`) vs.
+      **Save as a new plan** (`POST /client/plans` → `plan_svc.save_plan`, unconditional, never
+      queries for an existing plan first). Also made version history actually readable: migration
+      `0049` adds nullable `title`/`provenance` to `plan_versions` (previously `revise_plan`
+      overwrote the parent Plan's title/provenance wholesale with nothing capturing what v1 actually
+      said — the Versions rail listed dead rows with no way to open them), `save_plan`/`revise_plan`
+      now snapshot both on every write, and new `GET /client/plans/{id}/versions/{v}`
+      (`plan_svc.get_version`/`decrypt_version_body`, read-only, no audit/rate-limit) serves an old
+      version's body. `PlanSideRail`'s Versions rows are now clickable; `PlanDocument` swaps in the
+      selected version's title/body/budget above a "Viewing vN · Back to latest" banner and hides
+      rating/share/export/lead-CTA while viewing history (none take a version parameter — an old
+      snapshot is read-only). A version saved before 0049 has no snapshot: the endpoint falls back to
+      the parent Plan's title only (never its provenance, which could misattribute a later research
+      run to older content) and the rail says "Provenance wasn't recorded for this version." 14 new
+      backend unit tests (`test_plan_versions.py`, `test_client_router_plan_version.py`,
+      `test_client_router_save_plan.py`, plus 2 extended assertions in `test_plan_revise.py` pinning
+      that a version row snapshots the draft's title/provenance, not just its body) — all pass;
+      786 passed/16 pre-existing failures overall (same `ENCRYPTION_KEY`-length/SDK-stub gaps as
+      5.9-5.11, confirmed unrelated — none of the 16 failing files were touched, and the count is
+      actually down from 5.11's 33, apparently host-env flakiness in `test_llm_tuning.py`/
+      `test_orchestrator.py` rather than anything this session did). Frontend: `tsc --noEmit` clean
+      and `npm run build` compiles with zero errors/warnings across all routes including the new
+      `/api/client/plans/[id]/versions/[version]` BFF route. No manual browser click-through this
+      session — see PROGRESS.md.
+
 Seed script: `backend/scripts/seed_client_demo.py` provisions a demo workspace, agent, department
 grant, and a placeholder rate card, and mints one invite — run it, then upload + attach sanitized
 case studies by hand (file upload UI, then `/agent/<id>/edit`) before the event.

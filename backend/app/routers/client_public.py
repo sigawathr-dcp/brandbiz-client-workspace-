@@ -79,15 +79,16 @@ async def get_shared_plan(
         raise HTTPException(status_code=503, detail="Client workspaces are disabled")
 
     plan = await plan_svc.get_plan_by_share_token(session, token)
-    body = plan_svc.decrypt_body(plan)
+    version = await plan_svc.get_current_version(session, plan)
+    body = plan_svc.decrypt_body(version)
     return {
         "id": str(plan.id),
-        "title": plan.title,
+        "title": version.title,
         "status": plan.status,
-        "version": plan.version,
+        "version": version.version_no,
         "core_idea": body.get("core_idea", ""),
         "analogous_case": body.get("analogous_case", ""),
         "adapted_plan": body.get("adapted_plan", []),
-        "budget": plan.budget,
+        "budget": await plan_svc.budget_out(session, version),
         "created_at": plan.created_at.isoformat(),
     }

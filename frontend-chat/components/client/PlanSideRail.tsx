@@ -3,12 +3,30 @@
 import { parseProvenance } from './provenance'
 import type { SavedPlan } from './types'
 
-// Client Workspaces redesign (PLAN.md Task 5.10) — the plan document's
-// 320px right rail: what the plan drew on (Provenance), its real save
-// history (Versions — plan_versions gets exactly one row per plan today;
-// this renders that row, never a fabricated v2+), and a storage note.
-export default function PlanSideRail({ plan }: { plan: SavedPlan }) {
-  const rows = parseProvenance(plan.provenance)
+// Client Workspaces redesign (PLAN.md Task 5.10; version switching added
+// in Task 5.12) — the plan document's 320px right rail: what the VIEWED
+// version drew on (Provenance), its real save history (Versions — each
+// row is clickable and loads that version's own body into PlanDocument),
+// and a storage note.
+export default function PlanSideRail({
+  plan,
+  viewingVersion,
+  viewingProvenance,
+  onSelectVersion,
+}: {
+  plan: SavedPlan
+  // Which version's row is highlighted — the plan's current version when
+  // nothing older is being viewed, otherwise the older version's number.
+  viewingVersion: number
+  // The PROVENANCE OF THE VERSION BEING VIEWED, not plan.provenance — for
+  // an older version those can differ (a later revision's research run
+  // shouldn't get attributed to earlier content). null when that version
+  // predates migration 0049's snapshot column (Task 5.12) and truly has
+  // none recorded.
+  viewingProvenance: Record<string, unknown> | null
+  onSelectVersion: (version: number) => void
+}) {
+  const rows = parseProvenance(viewingProvenance)
 
   return (
     <div
@@ -22,7 +40,12 @@ export default function PlanSideRail({ plan }: { plan: SavedPlan }) {
         gap: 18,
       }}
     >
-      {rows.length > 0 && (
+      {rows.length === 0 && viewingVersion !== plan.version ? (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>Provenance</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Provenance wasn&apos;t recorded for this version.</div>
+        </div>
+      ) : rows.length > 0 && (
         <div>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>Provenance</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
@@ -77,14 +100,29 @@ export default function PlanSideRail({ plan }: { plan: SavedPlan }) {
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--ink)' }}>Versions</div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {plan.versions.map((v) => (
-            <div key={v.version} style={{ display: 'flex', gap: 10, padding: '9px 0', borderBottom: '1px solid var(--line)' }}>
-              <span style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--accent)', width: 22 }}>
+            <button
+              key={v.version}
+              onClick={() => onSelectVersion(v.version)}
+              style={{
+                display: 'flex',
+                gap: 10,
+                padding: '9px 0',
+                border: 'none',
+                borderBottom: '1px solid var(--line)',
+                background: v.version === viewingVersion ? 'var(--accent-weak)' : 'transparent',
+                borderRadius: 4,
+                width: '100%',
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--accent)', width: 22, flex: 'none' }}>
                 v{v.version}
               </span>
               <div style={{ fontSize: 12, color: 'var(--ink-2)' }}>
                 Saved from chat · {new Date(v.created_at).toLocaleString()}
               </div>
-            </div>
+            </button>
           ))}
           {plan.status === 'draft' && (
             <div style={{ display: 'flex', gap: 10, padding: '9px 0', color: 'var(--ink-4)' }}>

@@ -16,7 +16,9 @@ export default function PlanDraftCard({
   savedPlanId,
   onSave,
   saving,
+  saveError,
   agentName,
+  activePlan,
 }: {
   status: 'pending' | 'done' | 'error'
   plan?: DraftPlan
@@ -24,9 +26,18 @@ export default function PlanDraftCard({
   showDetail?: boolean
   saved?: boolean
   savedPlanId?: string
-  onSave: () => void
+  onSave: (mode: 'revise' | 'new') => void
   saving?: boolean
+  // Set when a previous save attempt on THIS card failed — surfaced
+  // instead of silently console.error'd (see ClientWorkspace.tsx::handleSavePlan).
+  saveError?: string
   agentName: string
+  // Set when this seat already has a plan open (Task 5.12 — a seat can
+  // hold several plans, so the client chooses each time rather than the
+  // card silently deciding for them). When set, two actions are offered:
+  // revise it into the next version, or save this draft as an independent
+  // new plan. See ClientWorkspace.tsx::handleSavePlan.
+  activePlan?: { title: string; nextVersion: number }
 }) {
   if (status === 'pending') {
     return (
@@ -140,47 +151,88 @@ export default function PlanDraftCard({
         </div>
       </div>
 
-      <div style={{ borderTop: '1px solid var(--line)', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)' }}>
+      <div style={{ borderTop: '1px solid var(--line)', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--surface)' }}>
         {saved ? (
-          <a
-            href={savedPlanId ? `/w/plans/${savedPlanId}` : '/w/plans'}
-            style={{
-              height: 36,
-              padding: '0 15px',
-              borderRadius: 8,
-              border: '1px solid var(--line-2)',
-              background: 'var(--surface)',
-              color: 'var(--ink-2)',
-              fontSize: 13.5,
-              fontWeight: 500,
-              display: 'inline-flex',
-              alignItems: 'center',
-              textDecoration: 'none',
-            }}
-          >
-            View saved plan
-          </a>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <a
+              href={savedPlanId ? `/w/plans/${savedPlanId}` : '/w/plans'}
+              style={{
+                height: 36,
+                padding: '0 15px',
+                borderRadius: 8,
+                border: '1px solid var(--line-2)',
+                background: 'var(--surface)',
+                color: 'var(--ink-2)',
+                fontSize: 13.5,
+                fontWeight: 500,
+                display: 'inline-flex',
+                alignItems: 'center',
+                textDecoration: 'none',
+              }}
+            >
+              View saved plan
+            </a>
+            <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Keeps it past the 30-day message wipe, versioned.</span>
+          </div>
         ) : (
-          <button
-            onClick={onSave}
-            disabled={saving}
-            style={{
-              height: 36,
-              padding: '0 15px',
-              borderRadius: 8,
-              border: 'none',
-              background: 'var(--accent)',
-              color: '#fff',
-              fontSize: 13.5,
-              fontWeight: 500,
-              cursor: saving ? 'default' : 'pointer',
-              opacity: saving ? 0.7 : 1,
-            }}
-          >
-            {saving ? 'Saving…' : 'Save as a plan'}
-          </button>
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                onClick={() => onSave(activePlan ? 'revise' : 'new')}
+                disabled={saving}
+                style={{
+                  height: 36,
+                  padding: '0 15px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  fontSize: 13.5,
+                  fontWeight: 500,
+                  cursor: saving ? 'default' : 'pointer',
+                  opacity: saving ? 0.7 : 1,
+                }}
+              >
+                {saving
+                  ? 'Saving…'
+                  : activePlan
+                    ? `Save as v${activePlan.nextVersion} of "${activePlan.title}"`
+                    : 'Save as a plan'}
+              </button>
+              {activePlan && (
+                <button
+                  onClick={() => onSave('new')}
+                  disabled={saving}
+                  style={{
+                    height: 36,
+                    padding: '0 15px',
+                    borderRadius: 8,
+                    border: '1px solid var(--line-2)',
+                    background: 'var(--surface)',
+                    color: 'var(--ink-2)',
+                    fontSize: 13.5,
+                    fontWeight: 500,
+                    cursor: saving ? 'default' : 'pointer',
+                    opacity: saving ? 0.7 : 1,
+                  }}
+                >
+                  Save as a new plan
+                </button>
+              )}
+              {!activePlan && (
+                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Keeps it past the 30-day message wipe, versioned.</span>
+              )}
+            </div>
+            {activePlan && (
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>
+                Revising replaces what&apos;s on the plan document; a new plan sits beside it.
+              </div>
+            )}
+            {saveError && (
+              <div style={{ fontSize: 11.5, color: 'var(--danger, #b91c1c)' }}>{saveError}</div>
+            )}
+          </>
         )}
-        <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>Keeps it past the 30-day message wipe, versioned.</span>
       </div>
     </div>
   )

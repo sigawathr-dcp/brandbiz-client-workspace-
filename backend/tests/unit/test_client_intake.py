@@ -13,6 +13,7 @@ from app.services.client_intake import (
     FIELD_LABELS,
     INTAKE_SCRIPT,
     field_manifest,
+    index_of_field,
     resolve_answer,
     step_at,
     total_steps,
@@ -69,6 +70,24 @@ class TestFieldManifest:
     def test_labels_match_field_labels(self):
         for f in field_manifest():
             assert f["label"] == FIELD_LABELS[f["key"]]
+
+    def test_options_match_the_script_in_order(self):
+        # The Profile tab's edit mode (Task 5.11) renders these chips
+        # directly — must stay index-aligned with resolve_answer's
+        # option_index so an edit picks the same value the original
+        # intake step would have.
+        for f, step in zip(field_manifest(), INTAKE_SCRIPT):
+            assert [o["label"] for o in f["options"]] == [o["label"] for o in step["options"]]
+            assert [o["index"] for o in f["options"]] == list(range(len(step["options"])))
+
+
+class TestIndexOfField:
+    def test_round_trips_every_field(self):
+        for i, step in enumerate(INTAKE_SCRIPT):
+            assert index_of_field(step["field"]) == i
+
+    def test_unknown_field_returns_none(self):
+        assert index_of_field("not_a_real_field") is None
 
 
 class TestResolveAnswer:

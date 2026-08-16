@@ -37,21 +37,28 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def check(key: str, *, limit: int, window_seconds: float) -> None:
+    """Fixed-window check/record against an arbitrary bucket key. Callers
+    that need something other than client-IP keying (e.g. per-user, so one
+    attendee can't exhaust a bucket shared by the whole booth's NAT IP —
+    see /client/intake/fields) call this directly instead of going through
+    the rate_limit() FastAPI dependency below."""
+    now = time.monotonic()
+    bucket = _WINDOWS[key]
+    cutoff = now - window_seconds
+    while bucket and bucket[0] < cutoff:
+        bucket.pop(0)
+    if len(bucket) >= limit:
+        raise HTTPException(status_code=429, detail="Too many requests — please slow down.")
+    bucket.append(now)
+
+
 def rate_limit(key_prefix: str, *, limit: int, window_seconds: float):
     """FastAPI dependency factory: `limit` requests per `window_seconds`,
     per client IP, namespaced by `key_prefix` so different endpoints don't
     share a bucket."""
 
     async def _dep(request: Request) -> None:
-        ip = _client_ip(request)
-        key = f"{key_prefix}:{ip}"
-        now = time.monotonic()
-        bucket = _WINDOWS[key]
-        cutoff = now - window_seconds
-        while bucket and bucket[0] < cutoff:
-            bucket.pop(0)
-        if len(bucket) >= limit:
-            raise HTTPException(status_code=429, detail="Too many requests — please slow down.")
-        bucket.append(now)
+        check(f"{key_prefix}:{_client_ip(request)}", limit=limit, window_seconds=window_seconds)
 
     return _dep

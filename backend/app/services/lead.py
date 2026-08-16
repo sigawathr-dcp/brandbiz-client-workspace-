@@ -33,6 +33,7 @@ async def submit(
     contact_name: str | None,
     contact_phone_or_line: str | None,
     best_time: str | None,
+    engagement_id: uuid.UUID | None = None,
 ) -> Lead:
     workspace = (await session.execute(
         select(Workspace).where(Workspace.id == user.workspace_id)
@@ -49,12 +50,20 @@ async def submit(
         )).scalar_one_or_none()
         if plan is None:
             raise HTTPException(status_code=404, detail="Plan not found")
-        plan_title = plan.title
+        # DB redesign: title now lives on the plan's current version, not
+        # the Plan head row itself — see app/models/plan.py.
+        from app.services import plan as plan_svc
+
+        version = await plan_svc.get_current_version(session, plan)
+        plan_title = version.title
+        if engagement_id is None:
+            engagement_id = plan.engagement_id
 
     lead = Lead(
         workspace_id=user.workspace_id,
         user_id=user.id,
         plan_id=plan_id,
+        engagement_id=engagement_id,
         contact_name=contact_name,
         contact_phone_or_line=contact_phone_or_line,
         best_time=best_time,

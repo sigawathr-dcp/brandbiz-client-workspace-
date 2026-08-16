@@ -18,11 +18,18 @@ export interface IntakeAnswerResponse {
   completion_message: string | null
   current_step: CurrentStep | null
   insight: string | null
+  // Canonical fields after this answer — see ClientWorkspace.tsx::answerIntake
+  // for why the frontend replaces its whole `fields` state from this instead
+  // of guessing at what the server stored.
+  fields: Record<string, string>
 }
 
 export interface IntakeField {
   key: string
   label: string
+  // Same chips the intake step offered — lets the Profile tab's edit mode
+  // (Task 5.11) render familiar chips instead of a bare free-text box.
+  options: Chip[]
 }
 
 export interface BootstrapData {
@@ -35,7 +42,13 @@ export interface BootstrapData {
     file_count: number
     web_search: boolean
   } | null
-  conversation_id: string
+  conversation_id: string | null
+  // DB redesign — the id of the engagement this bootstrap describes
+  // (app/models/engagement.py::Engagement) and which of its plans is
+  // "active" (what a revision targets, what the switcher checkmarks) —
+  // server state now, replacing the old bb:activePlan:* localStorage key.
+  engagement_id: string
+  active_plan_id: string | null
   step: number
   total_steps: number
   completed: boolean
@@ -62,7 +75,17 @@ export interface BootstrapData {
   research: ResearchResult | null
   cases_status: 'idle' | 'pending' | 'done' | 'error'
   cases: CasesResult | null
-  latest_plan: { id: string; version: number } | null
+  // Task 5.12 — a seat can hold several plans (POST /client/plans always
+  // creates a new one; there's no unique constraint tying a workspace/user
+  // to a single row), so bootstrap replays the full list, newest first,
+  // instead of only the most recently saved one.
+  plans: PlanSummary[]
+}
+
+export interface PlanSummary {
+  id: string
+  title: string
+  version: number
 }
 
 export interface Finding {
@@ -163,6 +186,21 @@ export interface SavedPlan {
   rating: PlanRatingData | null
 }
 
+// GET /client/plans/{id}/versions/{v} (Task 5.12) — a historical version's
+// body, read-only. title/provenance are the version's own snapshot
+// (migration 0049); for a version saved before that migration, title falls
+// back server-side to the parent Plan's title and provenance is null.
+export interface PlanVersionBody {
+  version: number
+  created_at: string
+  title: string
+  core_idea: string
+  analogous_case: string
+  adapted_plan: AdaptedPlanItem[]
+  budget: Budget | null
+  provenance: Record<string, unknown> | null
+}
+
 export type TurnKind = 'text' | 'research' | 'cases' | 'plan' | 'milestone'
 
 export interface Turn {
@@ -182,6 +220,9 @@ export interface Turn {
   planError?: string
   planSaved?: boolean
   savedPlanId?: string
+  // Set when a save/revise attempt on this card's plan failed — surfaced
+  // on the card instead of only console.error'd (Task 5.12).
+  planSaveError?: string
   // set iff kind === 'milestone' — see MilestoneTurn.tsx
   milestone?: { title: string; sub: string }
   // set on the AI turn that follows an intake answer — see InsightCallout.tsx

@@ -39,6 +39,11 @@ class Lead(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
+    engagement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("engagements.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     plan_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("plans.id", ondelete="SET NULL"),
