@@ -1,5 +1,6 @@
-"""Unit tests for app/services/case_card.py — parsing the scraped
-case-study markdown template into client-facing card fields."""
+"""Unit tests for app/services/case_card.py — parsing both case-study
+markdown shapes (scraped and spreadsheet-curated) into client-facing card
+fields."""
 from app.services.case_card import parse_case_card
 
 FULL_CASE = """# Case Study: AURABLUEคู่หน้าGON
@@ -45,6 +46,52 @@ BULLETS_ONLY_CASE = """# Case Study: GRAB 10 VERSARY
 """
 
 
+# The spreadsheet-curated shape: OUR WORK / BRAND COMMUNICATION promoted to
+# real H2s, plus metadata keys the scraped shape never emits.
+CURATED_CASE = """# Case Study: DUNE : PART TWO
+
+- **Client:** WARNER BROS. THAILAND
+- **Category:** ENTERTAINMENT – MOVIES
+- **Source:** https://www.brandbizsolution.co.th/TH/works/warner_dune.html
+- **Also published at:** https://www.brandbizsolution.co.th/TH/works/dune.html
+- **Reference:** https://example.com/press/dune-part-two-campaign
+
+## Our work
+
+- Influencer Marketing
+- Creative Content Production
+
+## Brand communication
+
+ขับเคลื่อนกระแสภาพยนตร์ผ่านกลยุทธ์ Co-Creation ร่วมกับครีเอเตอร์สายภาพยนตร์เพื่อสร้างบทสนทนาในวงกว้างก่อนวันเข้าฉายจริง
+
+## Execution details (from portfolio site)
+
+### Deliverables
+
+- Key Visual Adaptation
+
+---
+_Curated case study from "Data for DSMEs Agent.xlsx" (case #9), merged with the portfolio write-up scraped from brandbizsolution.co.th._
+"""
+
+# Same curated shape, but the spreadsheet's BRAND COMMUNICATION cell was
+# empty — so the service bullets under "## Our work" are all there is.
+CURATED_NO_NARRATIVE_CASE = """# Case Study: RIKU Sense Of Soul
+
+- **Client:** RIKU
+- **Category:** BEAUTY & SKINCARE
+
+## Our work
+
+- Brand Repositioning
+- Influencer Marketing
+
+---
+_Curated case study from "Data for DSMEs Agent.xlsx" (case #7). No matching page on the portfolio site._
+"""
+
+
 def test_full_case_parses_every_field() -> None:
     card = parse_case_card(FULL_CASE)
     assert card.title == "AURABLUEคู่หน้าGON"
@@ -76,6 +123,30 @@ def test_placeholder_case_has_no_summary_but_keeps_identity() -> None:
 def test_bullets_fallback_when_no_narrative() -> None:
     card = parse_case_card(BULLETS_ONLY_CASE)
     assert card.summary == "Branding & Communication Campaigns · Creative Event 10 years"
+    assert card.image_url is None
+
+
+def test_curated_shape_parses_every_field() -> None:
+    card = parse_case_card(CURATED_CASE)
+    assert card.title == "DUNE : PART TWO"
+    assert card.client == "WARNER BROS. THAILAND"
+    assert card.category == "ENTERTAINMENT – MOVIES"
+    assert card.source_url == "https://www.brandbizsolution.co.th/TH/works/warner_dune.html"
+    assert card.summary is not None
+    assert card.summary.startswith("ขับเคลื่อนกระแสภาพยนตร์")
+    # **Reference:** is an article link, not an image — it must not become a
+    # thumbnail, and neither it nor the curated footer may leak into the card
+    assert card.image_url is None
+    assert "example.com" not in card.summary
+    assert "Data for DSMEs Agent" not in card.summary
+
+
+def test_curated_bullets_fallback_when_narrative_cell_was_empty() -> None:
+    # Regression: the fallback used to match only "## What we did", so a
+    # curated case with no narrative produced no summary at all.
+    card = parse_case_card(CURATED_NO_NARRATIVE_CASE)
+    assert card.summary == "Brand Repositioning · Influencer Marketing"
+    assert card.source_url is None
     assert card.image_url is None
 
 
