@@ -38,6 +38,8 @@ export default function WorkPanel({
   navigable,
   onSaveProfile,
   savingProfile,
+  profileError,
+  intakeStep,
 }: {
   tab: WorkTab
   onTab: (t: WorkTab) => void
@@ -59,8 +61,18 @@ export default function WorkPanel({
   // answered fields; PATCH /client/intake/fields is the only write path
   // (see ClientWorkspace.tsx::handleSaveProfile for the resubmit cascade
   // this triggers once intake is complete).
-  onSaveProfile: (updates: { field: string; option_index?: number; free_text?: string }[]) => Promise<void>
+  // Resolves to whether the server accepted the edit. A `false` keeps the
+  // pending chips and edit mode on screen so the client can see what failed
+  // and retry, instead of the correction silently disappearing.
+  onSaveProfile: (updates: { field: string; option_index?: number; free_text?: string }[]) => Promise<boolean>
   savingProfile: boolean
+  profileError: string
+  // engagement_steps.progress_current for the interview step, straight from
+  // GET /client/bootstrap. The backend rejects an edit to any question the
+  // client hasn't reached (idx >= progress_current — app/routers/client.py::
+  // edit_intake_fields), so the UI gates on the same number rather than
+  // re-deriving its own rule that can disagree with it.
+  intakeStep: number
 }) {
   const filled = intakeFields.filter((f) => fields[f.key]).length
   const pct = intakeFields.length > 0 ? Math.round((filled / intakeFields.length) * 100) : 0
@@ -82,7 +94,8 @@ export default function WorkPanel({
     const updates = Object.entries(pending)
       .filter(([, v]) => v.option_index !== undefined || (v.free_text ?? '').trim())
       .map(([field, v]) => ({ field, option_index: v.option_index, free_text: v.free_text }))
-    await onSaveProfile(updates)
+    const ok = await onSaveProfile(updates)
+    if (!ok) return // keep `pending` and edit mode — profileError explains why
     setPending({})
     setEditMode(false)
   }
@@ -169,13 +182,14 @@ export default function WorkPanel({
               <div style={{ height: '100%', background: 'var(--accent)', width: `${pct}%`, transition: 'width .5s ease' }} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {intakeFields.map((f) => {
-                // A field has been asked (and so is correctable) exactly
-                // when it has a value — profile.step only ever advances
-                // forward, so this mirrors the backend's idx < profile.step
-                // guard (PATCH /client/intake/fields) without needing step
-                // as a separate prop.
-                const answered = !!fields[f.key]
+              {intakeFields.map((f, idx) => {
+                // The backend's own rule, verbatim: a question is correctable
+                // exactly when the client has already reached it
+                // (idx < progress_current — app/routers/client.py::
+                // edit_intake_fields). This used to be re-derived here as
+                // `!!fields[f.key]`, which can disagree with the server and
+                // offer chips the PATCH then rejects with a 400.
+                const answered = idx < intakeStep
                 const edit = pending[f.key]
                 return (
                   <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
@@ -236,6 +250,11 @@ export default function WorkPanel({
                 )
               })}
             </div>
+            {profileError && (
+              <div role="alert" style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--danger, #b91c1c)' }}>
+                {profileError}
+              </div>
+            )}
             {editMode ? (
               <div style={{ display: 'flex', gap: 8 }}>
                 <button

@@ -42,6 +42,10 @@ export default function NavRail({
           style={{
             width: 30,
             height: 30,
+            // globals.css gives every <button> `padding: 6px 14px`; with
+            // border-box that leaves a 0px-wide content box here and the
+            // flex-shrinkable <svg> collapses to nothing (invisible X).
+            padding: 0,
             borderRadius: 8,
             border: '1px solid var(--line-2)',
             background: 'var(--surface)',

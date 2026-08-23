@@ -358,11 +358,71 @@ tr:hover td { background: var(--surface-2); }
 }
 
 .client-chat-header {
+  height: 52px;
   padding: 0 22px;
+}
+
+/* The agent block sits between the avatar and the progress block, so it is
+ * the part that has to give: each line truncates instead of wrapping, which
+ * is what used to push the header past its fixed height and overlap the
+ * topbar/thread on a phone. */
+.client-chat-agent-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .client-thread {
   padding: 26px 22px 0;
+  gap: 20px;
+}
+
+/* Chat turns. The three below carry the pieces of a turn whose size changes
+ * with the viewport, so they live here rather than inline (same rule as
+ * .client-topbar above).
+ *
+ * min-width: 0 on the body is the load-bearing one: a turn is a flex row
+ * (avatar + body) and a flex item defaults to min-width:auto, i.e. it refuses
+ * to shrink below its content. A markdown code block (<pre overflow-x:auto>)
+ * or a wide markdown table then widens the whole chat column instead of
+ * scrolling inside itself, and the column pushes the grid sideways. With
+ * min-width: 0 the body shrinks and those children scroll internally.
+ * overflow-wrap handles the other half — a long unbroken token (a URL, a
+ * pasted id) that no amount of shrinking can wrap. */
+.client-turn-body {
+  max-width: 640px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.client-turn-bubble {
+  /* min() so the bubble still reads as a bubble on a phone rather than
+   * spanning the full column width. */
+  max-width: min(520px, 88%);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.client-turn-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+/* The "draft my plan" prompt above the composer — a bilingual label that is
+ * far too long for one line on a phone, so it has to be allowed to wrap
+ * instead of being clipped by a fixed 34px height. */
+.client-draft-cta {
+  min-height: 34px;
+  max-width: 100%;
+  padding: 7px 14px;
+  text-align: left;
+  line-height: 1.35;
+  white-space: normal;
+  /* Thai has no inter-word spaces, so the label is effectively one long
+   * token — without this the button's min-content width stays wider than a
+   * small phone. */
+  overflow-wrap: anywhere;
 }
 
 .client-composer-wrap {
@@ -398,6 +458,7 @@ tr:hover td { background: var(--surface-2); }
 
 .client-chat-progress {
   display: block;
+  width: 250px;
 }
 
 .client-chat-hint {
@@ -460,6 +521,40 @@ tr:hover td { background: var(--surface-2); }
   justify-content: flex-end;
 }
 
+/* Adapted-plan phase rows (PlanDocument / SharedPlanView / PlanDraftCard).
+ * The period label is model-written free text, not the short "Month 1" the
+ * original fixed 54px mono column assumed — a real one reads
+ * "เดือนที่ 1: Foundation & Positioning". Two things broke on that:
+ * IBM Plex Mono has no Thai subset, so Thai fell back to a font whose tone
+ * marks collide at 12px, and 54px wrapped the label into a stack of near-
+ * empty lines. Hence: sans (which has the Thai face), a Thai-safe
+ * line-height, and enough width to wrap sanely. */
+.client-plan-phase {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.client-plan-phase-period {
+  width: 124px;
+  flex: none;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+/* PlanDraftCard renders inside the chat thread / work panel, which stays
+ * narrow at every viewport width, so its rows always stack. */
+.client-plan-phase.is-stacked {
+  flex-direction: column;
+  gap: 1px;
+}
+
+.client-plan-phase.is-stacked .client-plan-phase-period {
+  width: auto;
+}
+
 /* PlanRating.tsx's 1-10 NPS score buttons — inline-styled everywhere else,
  * but the column count needs to drop on very narrow phones (see the 480px
  * rule below), so it lives here per the class-for-@media convention. */
@@ -468,10 +563,21 @@ tr:hover td { background: var(--surface-2); }
 }
 
 /* ClientWorkspace.tsx's "My plans" switcher popover (Task 5.12) — 280px,
- * capped against the viewport so it can't overflow off-screen on a narrow
- * phone where the topbar wraps (max-width instead of a breakpoint swap,
- * since nothing here needs to change shape, just stop clipping). */
+ * capped against the viewport so it can't get wider than the screen. The
+ * cap alone isn't enough on a phone: the popover hangs right-aligned off
+ * the "My plans" button, and once the topbar wraps that button sits near
+ * the LEFT edge, so a right-aligned 280px panel runs off-screen to the
+ * left. Below 768px the anchor goes static so the popover resolves against
+ * .client-topbar instead and tucks under the whole bar, inset by the
+ * topbar's own 12px padding. */
+.client-plan-anchor {
+  position: relative;
+}
+
 .client-plan-switcher {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
   width: 280px;
   max-width: calc(100vw - 24px);
 }
@@ -501,6 +607,9 @@ tr:hover td { background: var(--surface-2); }
     top: 10px;
     right: 10px;
     z-index: 1;
+    /* the generic `button` padding above would collapse this 30px square's
+     * content box to 0 and hide the X icon */
+    padding: 0;
   }
 }
 
@@ -511,13 +620,26 @@ tr:hover td { background: var(--surface-2); }
     padding: 8px 12px;
     flex-wrap: wrap;
     row-gap: 6px;
+    /* containing block for .client-plan-switcher once its anchor goes static */
+    position: relative;
+  }
+  .client-plan-anchor {
+    position: static;
+  }
+  .client-plan-switcher {
+    top: calc(100% + 6px);
+    right: 12px;
   }
   .client-topbar-label {
     display: none;
   }
 
+  /* 250px of progress block + the hint line leaves the agent name ~110px on
+   * a 430px phone, so it wrapped to three lines and spilled out of the 52px
+   * header. Drop the hint text and keep only the pips. */
   .client-chat-header { padding: 0 14px; }
-  .client-thread { padding: 18px 14px 0; }
+  .client-chat-progress { width: 96px; }
+  .client-thread { padding: 18px 14px 0; gap: 16px; }
   .client-composer-wrap { padding: 10px 14px 14px; }
   .client-chat-hint { display: none; }
 
@@ -541,10 +663,17 @@ tr:hover td { background: var(--surface-2); }
     top: 10px;
     right: 10px;
     z-index: 1;
+    padding: 0;
   }
 
   .client-paper-wrap { padding: 18px 12px; }
   .client-paper { padding: 24px 18px 22px; }
+
+  .client-plan-phase {
+    flex-direction: column;
+    gap: 1px;
+  }
+  .client-plan-phase-period { width: auto; }
 
   .client-plandoc-topbar {
     height: auto;
@@ -573,11 +702,18 @@ tr:hover td { background: var(--surface-2); }
 }
 
 /* Ten 1fr columns get uncomfortably narrow to tap below ~480px — drop to
- * two rows of 5 rather than shrinking further. */
+ * two rows of 5 rather than shrinking further. Below this width the chat
+ * column is also tight enough that the turn avatar and the thread gutters
+ * are worth reclaiming for message text. */
 @media (max-width: 480px) {
   .client-nps-grid {
     grid-template-columns: repeat(5, 1fr);
   }
+
+  .client-thread { padding: 14px 10px 0; }
+  .client-composer-wrap { padding: 8px 10px 12px; }
+  .client-turn-avatar { width: 24px; height: 24px; font-size: 11px; }
+  .client-turn-bubble { max-width: 94%; }
 }
 
 /* ---- Keyframes ---- */

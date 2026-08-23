@@ -13,13 +13,23 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
+  // Redirect off request.nextUrl, NOT request.url. In Docker the Next server
+  // binds 0.0.0.0:3000, and request.url carries that internal origin — so
+  // `new URL('/login', request.url)` sent the browser to
+  // http://0.0.0.0:3000/login, which is not a routable address
+  // (ERR_ADDRESS_INVALID). nextUrl is derived from the incoming Host header,
+  // so cloning it keeps the origin the browser actually used (localhost:3100).
   if (!token && pathname !== '/login') {
-    return NextResponse.redirect(new URL('/login', request.url))
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    return NextResponse.redirect(url)
   }
 
   if (token && pathname === '/login') {
     // Everyone previews the client workspace first — see app/login/page.tsx.
-    return NextResponse.redirect(new URL('/w', request.url))
+    const url = request.nextUrl.clone()
+    url.pathname = '/w'
+    return NextResponse.redirect(url)
   }
 
   return NextResponse.next()

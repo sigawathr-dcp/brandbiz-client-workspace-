@@ -83,8 +83,8 @@ export default function SharedPlanView({ token }: { token: string }) {
               <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 7 }}>Adapted plan</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
                 {plan.adapted_plan.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 12 }}>
-                    <div style={{ width: 54, flex: 'none', fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', paddingTop: 2 }}>{item.period}</div>
+                  <div key={i} className="client-plan-phase">
+                    <div className="client-plan-phase-period">{item.period}</div>
                     <div style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)' }}>{item.text}</div>
                   </div>
                 ))}
