@@ -111,6 +111,7 @@ async def test_research_sources_copies_real_citations():
         patch.object(plan_svc, "_latest_done_research", new=AsyncMock(return_value=research)),
         patch.object(plan_svc, "_research_finding_texts", new=AsyncMock(return_value=["finding"])),
         patch.object(plan_svc, "_latest_case_matches", new=AsyncMock(return_value=[])),
+        patch.object(plan_svc.engagement_svc, "get_step", new=AsyncMock(return_value=MagicMock(id=uuid.uuid4()))),
         patch.object(plan_svc, "prepare_chat", new=AsyncMock(return_value=_prepared())),
         patch.object(plan_svc, "run_chat_collect", new=AsyncMock(return_value=_collect_result())),
         patch.object(plan_svc.rate_card_svc, "price", new=AsyncMock(return_value=_priced_budget())),
@@ -136,6 +137,7 @@ async def test_research_sources_empty_when_no_completed_research_run():
         patch.object(plan_svc, "_available_rate_card", new=AsyncMock(return_value=[_rate_item()])),
         patch.object(plan_svc, "_latest_done_research", new=AsyncMock(return_value=None)),  # no run yet
         patch.object(plan_svc, "_latest_case_matches", new=AsyncMock(return_value=[])),
+        patch.object(plan_svc.engagement_svc, "get_step", new=AsyncMock(return_value=MagicMock(id=uuid.uuid4()))),
         patch.object(plan_svc, "prepare_chat", new=AsyncMock(return_value=_prepared())),
         patch.object(plan_svc, "run_chat_collect", new=AsyncMock(return_value=_collect_result())),
         patch.object(plan_svc.rate_card_svc, "price", new=AsyncMock(return_value=_priced_budget())),

@@ -37,7 +37,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import crypto
 from app.models.intake import IntakeOption, IntakeQuestion, IntakeScript
+from app.models.message import Message
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.routers import client as client_router
@@ -99,7 +101,7 @@ async def test_bootstrap_creates_one_engagement_with_four_idle_steps(db_session:
         )
 
     assert out.step == 0
-    assert out.total_steps == 8
+    assert out.total_steps == 9
     assert out.completed is False
     assert out.research_status == "idle"
     assert out.cases_status == "idle"
@@ -160,12 +162,14 @@ async def test_edit_intake_fields_rejects_a_question_not_yet_reached_and_is_appe
             )
         assert exc_info.value.status_code == 400
 
-        # PATCH /intake/fields is rate-limited to 1/60s per user
-        # (app/services/rate_limit.py) — the rejected call above already
-        # consumed this test's slot, so clear it before the real edit
-        # below. Not a redesign concern; this limiter predates it.
+        # PATCH /intake/fields is rate-limited per user
+        # (app/services/rate_limit.py), but the check now runs after validation
+        # and only when something will really be written — so the rejected call
+        # above must NOT have consumed this test's slot. No manual bucket clear
+        # here on purpose: if the check ever moves back ahead of validation,
+        # the edit below starts failing with a 429 and this test catches it.
         from app.services import rate_limit as rate_limit_svc
-        rate_limit_svc._WINDOWS.pop(f"intake_edit:{user.id}", None)
+        assert not rate_limit_svc._WINDOWS.get(f"intake_edit:{user.id}")
 
         # 'industry' has been asked — editing it is allowed and supersedes.
         edited = await client_router.edit_intake_fields(
@@ -252,3 +256,137 @@ async def test_save_then_revise_bumps_version_and_repoints_current(db_session: A
 
     await db_session.refresh(engagement)
     assert engagement.active_plan_id == plan.id
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_replays_the_transcript_across_a_reload(db_session: AsyncSession):
+    """Session survival (test topic 1.6): a refresh / tab close / phone
+    screen-lock must bring the client back to the same seat AND the same
+    thread. bootstrap used to rebuild the thread synthetically, so the
+    conversation the client had been reading vanished on every reload.
+
+    Also pins the two exclusions: the drafting prompt + raw JSON reply
+    (stamped with the 'plan' step by services/plan.py::draft_plan) stay out
+    of the chat thread, and a D14-purged row is dropped rather than replayed
+    as a placeholder.
+    """
+    await _seed_intake_script(db_session)
+    ws, user = await _make_seat(db_session)
+    ctx = ClientContext(user=user, workspace_id=ws.id, is_preview=False)
+
+    with patch.object(client_router.settings, "client_surface_enabled", True):
+        boot = await client_router.bootstrap(ctx, db_session)
+        await client_router.answer_intake(
+            client_router.IntakeAnswerIn(option_index=1, free_text=None), ctx, db_session,
+        )
+        await client_router.answer_intake(
+            client_router.IntakeAnswerIn(option_index=None, free_text="ทำแบรนด์ร้านกาแฟ"), ctx, db_session,
+        )
+
+        engagement = await engagement_svc.get_or_create_active(db_session, user, ws.id)
+        plan_step = await engagement_svc.get_step(db_session, engagement.id, "plan")
+
+        def _msg(role: str, text: str, step_id=None) -> Message:
+            ct, nonce, tag, kv = crypto.encrypt(text)
+            return Message(
+                conversation_id=engagement.conversation_id, role=role, engagement_step_id=step_id,
+                content_ciphertext=ct, content_nonce=nonce, content_tag=tag, key_version=kv,
+            )
+
+        db_session.add(_msg("user", "งบประมาณเท่าไหร่ดี"))
+        db_session.add(_msg("assistant", "ขึ้นกับขอบเขตงานครับ"))
+        db_session.add(_msg("user", "<8k-char drafting prompt>", plan_step.id))
+        db_session.add(_msg("assistant", '{"title": "raw json"}', plan_step.id))
+        # D14 retention nulled this one's content (app/services/retention.py).
+        db_session.add(Message(
+            conversation_id=engagement.conversation_id, role="assistant", key_version=1,
+        ))
+        await db_session.commit()
+
+        replayed = await client_router.bootstrap(ctx, db_session)
+
+    interview = [t for t in replayed.transcript if t.stage == "interview"]
+    chat = [t for t in replayed.transcript if t.stage == "chat"]
+
+    # Both answered questions come back as question/answer pairs, in script
+    # order — a chip through its Thai label, free text decrypted.
+    assert [t.who for t in interview] == ["ai", "user", "ai", "user"]
+    assert interview[0].text == intake_svc.INTAKE_SCRIPT[0]["question"]
+    assert interview[1].text == intake_svc.INTAKE_SCRIPT[0]["options"][1]["label"]
+    assert interview[2].text == intake_svc.INTAKE_SCRIPT[1]["question"]
+    assert interview[3].text == "ทำแบรนด์ร้านกาแฟ"
+
+    # Free-form chat only: no drafting prompt, no raw JSON, no purged row.
+    assert [(t.who, t.text) for t in chat] == [
+        ("user", "งบประมาณเท่าไหร่ดี"),
+        ("ai", "ขึ้นกับขอบเขตงานครับ"),
+    ]
+
+    # Same seat: the reload landed on the engagement that already existed.
+    assert replayed.engagement_id == boot.engagement_id
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_replays_the_saved_plan_card(db_session: AsyncSession):
+    """A client saved a plan, saw the card in chat, refreshed — and the card
+    was gone from the thread even though /w/plans still listed the plan.
+    bootstrap carried plan titles only (`plans`), never a body, so the
+    frontend had nothing to re-render the card from.
+
+    Also pins the engagement scoping: a plan is replayed into the thread of
+    the engagement that produced it, never into a later one — including when
+    the plan switcher has pointed engagements.active_plan_id at it from that
+    later engagement.
+    """
+    await _seed_intake_script(db_session)
+    ws, user = await _make_seat(db_session)
+    ctx = ClientContext(user=user, workspace_id=ws.id, is_preview=False)
+
+    draft = {
+        "title": "แผนแบรนด์ร้านกาแฟ",
+        "core_idea": "ขายบรรยากาศ ไม่ใช่แค่กาแฟ",
+        "analogous_case": "เหมือนเคส Roast House",
+        "adapted_plan": [{"period": "สัปดาห์ 1-2", "text": "วาง positioning"}],
+        "budget": {
+            "lines": [{"code": "BRAND-01", "label": "Brand workshop", "section": None,
+                       "unit": "session", "qty": "1", "unit_price": "50000", "amount": "50000"}],
+            "needs_expert": [],
+            "subtotal": "50000", "contingency": "5000", "total": "55000", "currency": "THB",
+        },
+        "provenance": {"rate_card_codes": ["BRAND-01"], "case_files": [],
+                       "research_run_id": None, "research_sources": []},
+    }
+
+    with patch.object(client_router.settings, "client_surface_enabled", True):
+        await client_router.bootstrap(ctx, db_session)
+        engagement = await engagement_svc.get_or_create_active(db_session, user, ws.id)
+        with patch.object(plan_svc.audit_svc, "log", new=AsyncMock()):
+            plan = await plan_svc.save_plan(db_session, user, ws.id, engagement, draft)
+
+        replayed = await client_router.bootstrap(ctx, db_session)
+
+        assert replayed.plan is not None
+        assert replayed.plan["id"] == str(plan.id)
+        assert replayed.plan["version"] == 1
+        assert replayed.plan["title"] == "แผนแบรนด์ร้านกาแฟ"
+        assert replayed.plan["core_idea"] == "ขายบรรยากาศ ไม่ใช่แค่กาแฟ"
+        assert replayed.plan["analogous_case"] == "เหมือนเคส Roast House"
+        assert replayed.plan["adapted_plan"] == [{"period": "สัปดาห์ 1-2", "text": "วาง positioning"}]
+        assert replayed.plan["budget"]["total"] == "55000.00"
+        assert [li["code"] for li in replayed.plan["budget"]["lines"]] == ["BRAND-01"]
+        assert replayed.plan["provenance"]["rate_card_codes"] == ["BRAND-01"]
+        assert replayed.plan["conversation_id"] == str(engagement.conversation_id)
+
+        # A fresh brief starts with an empty thread — the earlier engagement's
+        # plan stays on /w/plans (still in `plans`) but must not be replayed
+        # into this one, not even once it is the active plan again.
+        with patch.object(engagement_svc.audit_svc, "log", new=AsyncMock()):
+            second = await engagement_svc.start_new(db_session, user, ws.id)
+        second.active_plan_id = plan.id
+        await db_session.commit()
+
+        after_restart = await client_router.bootstrap(ctx, db_session)
+
+    assert after_restart.engagement_id == second.id
+    assert after_restart.plan is None
+    assert [p.id for p in after_restart.plans] == [plan.id]

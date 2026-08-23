@@ -88,32 +88,33 @@ def _active_model_result(code: str) -> MagicMock:
     return r
 
 
+def _empty_msgs() -> MagicMock:
+    """One empty Message-window result."""
+    result = MagicMock()
+    result.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
+    return result
+
+
 def _empty_history_session(model_code: str = "claude-sonnet-4") -> AsyncMock:
     """
     Session mock that satisfies:
-    - load_history_messages: one execute for Conversation (None → new conv created),
-      one for Message list (empty)
+    - load_history_messages: TWO Message-list executes (empty) — the free-form
+      window the model is shown and the unfiltered window the §7.6 tier scan
+      reads. conversation_id=None here, so no Conversation SELECT.
+    - the new-conversation auto-title UPDATE
     - _get_model: returns active model for `model_code`
     The session is reused so we track all add() calls.
     """
     conv = MagicMock()
     conv.id = uuid.uuid4()
 
-    # Conversation lookup → None (triggers creation)
-    conv_result = MagicMock()
-    conv_result.scalar_one_or_none.return_value = None
-
-    # Message history → empty
-    msg_result = MagicMock()
-    scalars = MagicMock()
-    scalars.all.return_value = []
-    msg_result.scalars.return_value = scalars
-
     # _get_model → active external model
     model_result = _active_model_result(model_code)
 
     session = AsyncMock()
-    session.execute = AsyncMock(side_effect=[conv_result, msg_result, model_result])
+    session.execute = AsyncMock(
+        side_effect=[_empty_msgs(), _empty_msgs(), MagicMock(), model_result]
+    )
     # flush() resolves the Conversation insert — give the conv a real id
     async def _flush():
         # After flush, the Conversation added via session.add() needs an id.
@@ -203,7 +204,8 @@ class TestAutoModel:
         msg_result.scalars.return_value = scalars
 
         session = AsyncMock()
-        session.execute = AsyncMock(side_effect=[conv_result, msg_result])
+        # Two history windows (chat + unfiltered), then the auto-title UPDATE.
+        session.execute = AsyncMock(side_effect=[conv_result, msg_result, MagicMock()])
         session.flush = AsyncMock()
         session.commit = AsyncMock()
         session.add = MagicMock()
@@ -246,7 +248,8 @@ class TestDenyPath:
         msg_result.scalars.return_value = scalars
 
         session = AsyncMock()
-        session.execute = AsyncMock(side_effect=[conv_result, msg_result])
+        # Two history windows (chat + unfiltered), then the auto-title UPDATE.
+        session.execute = AsyncMock(side_effect=[conv_result, msg_result, MagicMock()])
         session.flush = AsyncMock()
         session.commit = AsyncMock()
         session.add = MagicMock()
@@ -339,7 +342,9 @@ def _session_for_n8n_route() -> AsyncMock:
     """Minimal session for n8n_route detection tests.
 
     Satisfies:
-    - load_history_messages: Message list execute (new conv — no Conversation lookup)
+    - load_history_messages: TWO Message list executes (new conv — no
+      Conversation lookup). One window is the free-form turns the model is
+      shown, the other every turn, for the §7.6 tier scan.
     - prepare_chat sa_update for title: returns a generic mock
     All other DB activity is patched at a higher level.
     """
@@ -351,7 +356,7 @@ def _session_for_n8n_route() -> AsyncMock:
     update_result = MagicMock()  # sa_update title — return value unused
 
     session = AsyncMock()
-    session.execute = AsyncMock(side_effect=[msg_result, update_result])
+    session.execute = AsyncMock(side_effect=[msg_result, msg_result, update_result])
     session.flush = AsyncMock()
     session.commit = AsyncMock()
     session.add = MagicMock()

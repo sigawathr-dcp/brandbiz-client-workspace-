@@ -11,10 +11,14 @@ app/deps.py::ClientContext):
                                     client's second brief)
   POST /client/intake/answer  — record an answer, return the next step
   PATCH /client/intake/fields — correct an already-answered field (Task 5.11)
-  POST /client/chat            — chat with the workspace's agent (SSE)
+  POST /client/chat            — chat with the workspace's agent (SSE), with
+                                    the seat's current plan injected as
+                                    context so follow-ups about it land
   POST /client/research        — run the market scan (Perplexity)
   POST /client/cases           — match against the case library (RAG)
   POST /client/plan/draft      — draft a plan (not saved yet)
+  POST /client/plan/revise     — apply a client's plain-language edit and
+                                    commit it as the next version
   POST /client/plans           — save a drafted plan as an artifact
   PUT  /client/plans/{id}      — save a re-drafted plan as the next version
                                     of an existing plan (Task 5.11)
@@ -41,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -56,6 +61,7 @@ from app.config import settings
 from app.db import get_db
 from app.deps import ClientContext, require_client_context
 from app.llm.base import ChatMessage
+from app.llm.embeddings import EmbeddingError
 from app.llm.router import PERPLEXITY_MODEL_CODE, get_router
 from app.models.client_intake import (
     CaseMatch,
@@ -67,7 +73,9 @@ from app.models.client_intake import (
 )
 from app.models.engagement import Engagement, EngagementStep
 from app.models.file import File
-from app.models.intake import IntakeAnswer, IntakeOption
+from app.models.intake import IntakeAnswer, IntakeOption, IntakeQuestion
+from app.models.message import Message
+from app.models.plan import Plan
 from app.services import agent as agent_svc
 from app.services import audit as audit_svc
 from app.services import case_match as case_match_svc
@@ -76,6 +84,7 @@ from app.services import client_intake as intake_svc
 from app.services import engagement as engagement_svc
 from app.services import lead as lead_svc
 from app.services import plan as plan_svc
+from app.services import plan_edit_intent
 from app.services import plan_rating as plan_rating_svc
 from app.services import quota as quota_svc
 from app.services import rate_limit as rate_limit_svc
@@ -90,10 +99,9 @@ router = APIRouter(prefix="/client", tags=["client-workspace"])
 _logger = logging.getLogger(__name__)
 
 
-def _require_enabled() -> None:
-    if not settings.client_surface_enabled:
-        _logger.warning("client router: client_surface_enabled is False, rejecting request")
-        raise HTTPException(status_code=503, detail="Client workspaces are disabled")
+# The CLIENT_SURFACE_ENABLED kill switch is enforced by
+# Depends(require_client_surface) at include_router() level in main.py, not
+# per handler — see app/deps.py::require_client_surface for why.
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +127,40 @@ async def _load_fields(session: AsyncSession, step1: EngagementStep) -> dict[str
                 await session.execute(select(IntakeOption.value).where(IntakeOption.id == row.option_id))
             ).scalar_one()
         else:
+            value = crypto.decrypt(row.value_ciphertext, row.value_nonce, row.value_tag, row.key_version)
+        fields[row.field_key] = value
+    return fields
+
+
+async def _load_fields_th(session: AsyncSession, step1: EngagementStep) -> dict[str, str]:
+    """Same as _load_fields(), but a chip answer resolves through
+    IntakeOption.LABEL (the Thai text the client actually clicked) instead of
+    IntakeOption.value (English, by design — see client_intake.IntakeOption).
+
+    Only the market-scan prompt uses this. _load_fields() stays the canonical
+    reader: its English values feed the Profile tab and, more importantly,
+    case_match.build_context_query()'s bge-m3 embedding query, where changing
+    the language would move every match score shown to a client.
+
+    Reads labels off the engagement's own intake_script_id via the option row,
+    so a republished script never retranslates an in-flight engagement.
+    """
+    rows = (
+        await session.execute(
+            select(IntakeAnswer).where(
+                IntakeAnswer.engagement_step_id == step1.id, IntakeAnswer.superseded_at.is_(None)
+            )
+        )
+    ).scalars().all()
+
+    fields: dict[str, str] = {}
+    for row in rows:
+        if row.option_id is not None:
+            value = (
+                await session.execute(select(IntakeOption.label).where(IntakeOption.id == row.option_id))
+            ).scalar_one()
+        else:
+            # Free text is whatever the client typed — already Thai prose in practice.
             value = crypto.decrypt(row.value_ciphertext, row.value_nonce, row.value_tag, row.key_version)
         fields[row.field_key] = value
     return fields
@@ -222,6 +264,22 @@ class PlanSummaryOut(BaseModel):
     version: int
 
 
+class TranscriptTurnOut(BaseModel):
+    """One replayed chat bubble. Deliberately the smallest possible shape —
+    the rich turn kinds ('research', 'cases', 'plan') are replayed from their
+    own tables via research/cases/plans above, so the transcript only ever
+    carries plain text.
+
+    `stage` is what lets the frontend slot those rich cards back into the
+    right place in the thread: everything 'interview' precedes them,
+    everything 'chat' follows.
+    """
+
+    who: str  # 'ai' | 'user'
+    stage: str  # 'interview' | 'chat'
+    text: str
+
+
 class BootstrapOut(BaseModel):
     workspace: dict
     agent: dict | None
@@ -250,7 +308,20 @@ class BootstrapOut(BaseModel):
     research: dict | None = None
     cases_status: str = "idle"
     cases: dict | None = None
+    # The engagement's saved plan, body included, so the in-thread plan card
+    # survives a reload — bootstrap only ever carried plan *titles* (`plans`
+    # below), so a refresh dropped the card out of the chat entirely while
+    # /w/plans still listed the plan. No status field alongside it, unlike
+    # research/cases: this is populated only from a saved artifact, so it is
+    # always the equivalent of 'done'. See _plan_replay().
+    plan: dict | None = None
     plans: list[PlanSummaryOut] = []
+    # The chat bubbles to re-render, oldest first: the interview Q&A followed
+    # by any free-form turns. Before this existed the frontend rebuilt the
+    # thread synthetically on every reload ("Welcome back — your profile is
+    # complete."), so a refresh, a tab close, or a phone locking its screen
+    # threw away everything the client had read. See _transcript().
+    transcript: list[TranscriptTurnOut] = []
 
 
 class IntakeAnswerIn(BaseModel):
@@ -289,6 +360,12 @@ class IntakeEditOut(BaseModel):
 class ClientChatIn(BaseModel):
     conversation_id: uuid.UUID | None = None
     content: str
+    # Which saved plan this turn is about. Omitted → the engagement's
+    # active plan (engagements.active_plan_id). Send it explicitly from a
+    # surface that renders one specific plan (the plan document page), so
+    # the answer is about the plan on screen rather than whatever was
+    # activated last.
+    plan_id: uuid.UUID | None = None
 
 
 _STATUS_OUT = {"idle": "idle", "running": "pending", "done": "done", "failed": "error"}
@@ -312,7 +389,56 @@ async def _research_out(session: AsyncSession, run: ResearchRun) -> dict:
     }
 
 
-def _cases_out(rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None]]) -> dict:
+def _breakdown_json(result) -> dict | None:
+    """The per-dimension contributions behind a match, as stored JSONB.
+
+    None when the tag model is off (case_match_tag_weight = 0) or the corpus
+    is untagged — in both cases `score` is the plain cosine similarity it has
+    always been, and a breakdown claiming otherwise would be a lie about how
+    the number was produced.
+    """
+    b = getattr(result, "breakdown", None)
+    if b is None:
+        return None
+    return {
+        "tag_score": round(b.tag_score, 4),
+        "dense_score": round(b.dense_score, 4),
+        "final": round(b.final, 4),
+        "matched_on": list(b.matched_dimensions),
+        "dimensions": [
+            {
+                "dimension": d.dimension,
+                "weight": d.weight,
+                "raw": round(d.raw, 4),
+                "contribution": round(d.contribution, 4),
+                "reason": d.reason,
+            }
+            for d in b.dimensions
+        ],
+    }
+
+
+# Thai names for the scoring dimensions, for the card's "ตรงกับ: …" line.
+# Separate from THAI_FIELD_LABELS: that maps intake FIELDS (which include the
+# feasibility ones) while this maps the six scoring dimensions a card can
+# claim a match on.
+_DIMENSION_TH: dict[str, str] = {
+    "industry": "อุตสาหกรรม",
+    "stage": "ระยะธุรกิจ",
+    "audience": "กลุ่มลูกค้า",
+    "challenge": "ปัญหา",
+    "asset_channel": "ช่องทาง",
+    "objective": "เป้าหมาย",
+}
+
+
+def _cases_out(rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None, str | None]]) -> dict:
+    """`image_url` is passed in separately rather than read off `card`: the
+    scraped corpus has no images at all, so the parsed CaseCard's image_url is
+    always None and the thumbnail has to come from the case_studies catalog
+    (populated offline by scripts/backfill_case_images.py). GET /client/
+    bootstrap's replay already read the catalog; this is the fresh-match path
+    catching up, so a card doesn't gain its image only after a reload."""
     return {
         "matches": [
             {
@@ -325,9 +451,17 @@ def _cases_out(rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None]]) ->
                 "category": card.category if card else None,
                 "source_url": card.source_url if card else None,
                 "summary": card.summary if card else None,
-                "image_url": card.image_url if card else None,
+                "image_url": image_url,
+                # Which dimensions matched outright, in Thai, for the card's
+                # "ตรงกับ: …" line. Empty for matches scored before the tag
+                # model existed (score_breakdown IS NULL) — the card then
+                # shows the percentage alone, exactly as it used to.
+                "matched_on": [
+                    _DIMENSION_TH.get(d, d)
+                    for d in ((row.score_breakdown or {}).get("matched_on") or [])
+                ],
             }
-            for row, filename, file_id, card in rows
+            for row, filename, file_id, card, image_url in rows
         ]
     }
 
@@ -372,6 +506,14 @@ async def _case_matches_for_run(session: AsyncSession, run_id: uuid.UUID) -> dic
                 "source_url": card.source_url,
                 "summary": card.summary,
                 "image_url": card.image_url,
+                # Replayed from the stored breakdown so a reload shows the
+                # same "ตรงกับ: …" line the fresh match did. Empty for rows
+                # written before 0061 — those cards degrade to the score
+                # alone rather than claiming a match they cannot evidence.
+                "matched_on": [
+                    _DIMENSION_TH.get(d, d)
+                    for d in ((match.score_breakdown or {}).get("matched_on") or [])
+                ],
             }
             for match, filename, file_id, card in rows
         ]
@@ -405,6 +547,199 @@ async def _journey_status(
     return research_status, research_out, cases_status, cases_out
 
 
+# What a plan version with no recorded budget lines replays as. The card
+# renders a table only when `lines` is non-empty, so this shows the pricing
+# disclaimer and nothing else — the frontend's DraftPlan contract wants a
+# budget object, and inventing a null-check on the card for a case that only
+# arises on pre-normalization rows buys nothing.
+_EMPTY_BUDGET = {
+    "lines": [],
+    "needs_expert": [],
+    "subtotal": "0.00",
+    "contingency": "0.00",
+    "total": "0.00",
+    "currency": "THB",
+}
+
+
+async def _plan_replay(
+    session: AsyncSession, engagement: Engagement
+) -> dict | None:
+    """This engagement's saved plan, in the shape POST /client/plan/draft
+    returns plus `id`/`version`, so the frontend can re-render the in-thread
+    plan card after a reload.
+
+    Scoped to plans.engagement_id, not just engagements.active_plan_id: the
+    plan switcher can point active_plan_id at a plan saved during an EARLIER
+    engagement, and replaying that one would drop a foreign plan into this
+    engagement's thread. Prefer the active plan when it belongs here, else
+    the newest one this engagement produced.
+
+    An unsaved draft is not replayable — POST /client/plan/draft deliberately
+    persists nothing (only the drafting prompt + raw JSON reply land in
+    messages, tagged with the 'plan' step and filtered out of the
+    transcript), so a client who drafted but never pressed Save still comes
+    back to a thread with no card. That is the honest state: there is no
+    artifact yet.
+    """
+    plan: Plan | None = None
+    if engagement.active_plan_id is not None:
+        plan = (
+            await session.execute(
+                select(Plan).where(
+                    Plan.id == engagement.active_plan_id,
+                    Plan.engagement_id == engagement.id,
+                )
+            )
+        ).scalars().first()
+    if plan is None:
+        plan = (
+            await session.execute(
+                select(Plan)
+                .where(Plan.engagement_id == engagement.id)
+                .order_by(Plan.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+    if plan is None:
+        return None
+
+    version = await plan_svc.get_current_version(session, plan)
+    body = plan_svc.decrypt_body(version)
+    return {
+        "id": str(plan.id),
+        "version": version.version_no,
+        "title": version.title,
+        "core_idea": body.get("core_idea", ""),
+        "analogous_case": body.get("analogous_case", ""),
+        "adapted_plan": body.get("adapted_plan", []),
+        "budget": await plan_svc.budget_out(session, version) or _EMPTY_BUDGET,
+        "provenance": await plan_svc.provenance_out(session, version) or {},
+        "conversation_id": str(engagement.conversation_id) if engagement.conversation_id else "",
+    }
+
+
+# How many free-form chat bubbles bootstrap replays. Independent of
+# chat_policy._HISTORY_LIMIT (which bounds what the *model* is shown, and is
+# deliberately much tighter): this is what the *client* is shown, and a long
+# thread costs a scrollback, not context window.
+_TRANSCRIPT_CHAT_LIMIT = 100
+
+
+async def _intake_transcript(
+    session: AsyncSession, step1: EngagementStep
+) -> list[TranscriptTurnOut]:
+    """The interview replayed as question/answer bubbles, in script order.
+
+    Reads only live answers (superseded_at IS NULL), so a field edited via
+    PATCH /client/intake/fields replays with its current value — the same
+    value the Profile tab shows. A chip pick renders through IntakeOption.
+    LABEL (the Thai text the client actually clicked), matching what
+    ClientWorkspace.tsx echoes as the user turn at answer time; free text
+    is decrypted.
+    """
+    rows = (
+        await session.execute(
+            select(IntakeAnswer, IntakeQuestion)
+            .join(IntakeQuestion, IntakeQuestion.id == IntakeAnswer.question_id)
+            .where(
+                IntakeAnswer.engagement_step_id == step1.id,
+                IntakeAnswer.superseded_at.is_(None),
+            )
+            .order_by(IntakeQuestion.ordinal)
+        )
+    ).all()
+
+    turns: list[TranscriptTurnOut] = []
+    for answer, question in rows:
+        if answer.option_id is not None:
+            value = (
+                await session.execute(
+                    select(IntakeOption.label).where(IntakeOption.id == answer.option_id)
+                )
+            ).scalar_one()
+        else:
+            value = crypto.decrypt(
+                answer.value_ciphertext,
+                answer.value_nonce,
+                answer.value_tag,
+                answer.key_version,
+            )
+        turns.append(TranscriptTurnOut(who="ai", stage="interview", text=question.prompt))
+        turns.append(TranscriptTurnOut(who="user", stage="interview", text=value))
+    return turns
+
+
+async def _chat_transcript(
+    session: AsyncSession, conversation_id: uuid.UUID | None
+) -> list[TranscriptTurnOut]:
+    """The engagement's free-form chat, oldest first, last
+    _TRANSCRIPT_CHAT_LIMIT turns only.
+
+    `engagement_step_id IS NULL` is the filter that keeps machine turns out:
+    services/plan.py::draft_plan shares this conversation but stamps its
+    ~8k-char prompt and raw JSON reply with the 'plan' step, and the client
+    saw a plan card for those, not two chat bubbles.
+
+    A turn whose content was purged by D14 retention decrypts to
+    crypto.PURGED_PLACEHOLDER; those are dropped rather than shown, since a
+    row of placeholders reads as corruption to a client.
+    """
+    if conversation_id is None:
+        return []
+    rows = (
+        await session.execute(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.engagement_step_id.is_(None),
+                Message.role.in_(("user", "assistant")),
+            )
+            .order_by(Message.created_at.desc())
+            .limit(_TRANSCRIPT_CHAT_LIMIT)
+        )
+    ).scalars().all()
+
+    # created_at is func.now() — TRANSACTION start time in Postgres, so the
+    # user turn and the assistant turn of one exchange (persisted in a single
+    # commit by agents/orchestrator.py::call_llm) carry the IDENTICAL
+    # timestamp and ORDER BY created_at alone leaves them in an arbitrary
+    # order. Tie-break on role so the question always precedes its answer.
+    ordered = sorted(rows, key=lambda r: (r.created_at, 0 if r.role == "user" else 1))
+
+    turns: list[TranscriptTurnOut] = []
+    for row in ordered:
+        text = crypto.decrypt_message(
+            row.content_ciphertext, row.content_nonce, row.content_tag, row.key_version
+        )
+        if not text or text == crypto.PURGED_PLACEHOLDER:
+            continue
+        turns.append(
+            TranscriptTurnOut(
+                who="user" if row.role == "user" else "ai", stage="chat", text=text
+            )
+        )
+    return turns
+
+
+async def _transcript(
+    session: AsyncSession, step1: EngagementStep, conversation_id: uuid.UUID | None
+) -> list[TranscriptTurnOut]:
+    """Interview Q&A first, then free-form chat.
+
+    Not a strict merge on timestamp: the interview and the free-form thread
+    live in different tables (intake_answers vs messages) and an edited
+    answer's answered_at would drag it out of script order. Sequencing by
+    funnel stage is both stable and what the client experienced, since the
+    interview always precedes free-form chat. The research/cases cards go
+    between the two stages — the frontend splits on TranscriptTurnOut.stage
+    to place them (see ClientWorkspace.tsx's bootstrap effect).
+    """
+    return await _intake_transcript(session, step1) + await _chat_transcript(
+        session, conversation_id
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -414,7 +749,6 @@ async def bootstrap(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> BootstrapOut:
-    _require_enabled()
     workspace = await workspace_svc.get_workspace(session, ctx.workspace_id)
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
@@ -436,6 +770,7 @@ async def bootstrap(
         plan_summaries.append(PlanSummaryOut(id=p.id, title=version.title, version=version.version_no))
 
     research_status, research_out, cases_status, cases_out = await _journey_status(session, steps)
+    plan_out = await _plan_replay(session, engagement)
 
     agent_out = None
     if agent is not None:
@@ -469,7 +804,9 @@ async def bootstrap(
         research=research_out,
         cases_status=cases_status,
         cases=cases_out,
+        plan=plan_out,
         plans=plan_summaries,
+        transcript=await _transcript(session, step1, engagement.conversation_id),
     )
 
 
@@ -482,7 +819,6 @@ async def start_engagement(
     old schema's uq_client_profiles_workspace_user made this impossible;
     engagements.status lets a seat hold one ACTIVE engagement plus
     unlimited completed/abandoned ones (see app/models/engagement.py)."""
-    _require_enabled()
     await engagement_svc.start_new(session, ctx.user, ctx.workspace_id)
     return await bootstrap(ctx, session)
 
@@ -493,7 +829,6 @@ async def answer_intake(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> IntakeAnswerOut:
-    _require_enabled()
     engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
     step1 = await engagement_svc.get_step(session, engagement.id, "interview")
     total_steps = await intake_svc.total_steps_db(session, engagement.intake_script_id)
@@ -561,17 +896,21 @@ async def edit_intake_fields(
 
     Rate-limited per user (not per IP — D23 puts every booth attendee in
     one shared workspace, likely behind one NAT IP) so a resubmit can't be
-    spammed against the LLM-backed pipeline it triggers downstream.
+    spammed against the LLM-backed pipeline it triggers downstream. The check
+    runs AFTER validation and only when something actually changed: a rejected
+    or no-op request must not burn the caller's slot, or a client who corrects
+    a typo, gets a 400, and immediately retries is silently 429'd.
     """
-    _require_enabled()
-    rate_limit_svc.check(f"intake_edit:{ctx.user.id}", limit=1, window_seconds=60)
 
     engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
     step1 = await engagement_svc.get_step(session, engagement.id, "interview")
     current_index = step1.progress_current or 0
     fields_before = await _load_fields(session, step1)
 
-    changed: list[str] = []
+    # Resolve and validate everything first, writing nothing — so a 400 on the
+    # second of two updates can't leave the first one half-applied, and so the
+    # rate-limit slot below is only spent on a request that will really write.
+    resolved: list[tuple[str, uuid.UUID, uuid.UUID | None, str]] = []
     for update in body.updates:
         idx = await intake_svc.index_of_field_db(session, engagement.intake_script_id, update.field)
         if idx is None:
@@ -579,22 +918,28 @@ async def edit_intake_fields(
         if idx >= current_index:
             raise HTTPException(status_code=400, detail=f"'{update.field}' hasn't been asked yet")
 
-        step_def, value, question_id, option_id, source = await _resolve_answer_value(
+        step_def, value, question_id, option_id, _source = await _resolve_answer_value(
             session, engagement, idx,
             option_index=update.option_index, free_text=update.free_text,
         )
         if fields_before.get(update.field) == value:
             continue  # no-op — no new row, no audit entry, nothing worth regenerating
-        await _record_answer(
-            session, step1, question_id=question_id, field_key=step_def["field"],
-            # source='edit' (not the chip/free_text the resolver returned)
-            # — this row is a correction to an already-answered question,
-            # not the original answer; distinguishing the two is exactly
-            # what the old single-blob client_profiles.fields_ciphertext
-            # could never record.
-            option_id=option_id, free_text_value=None if option_id is not None else value, source="edit",
-        )
-        changed.append(update.field)
+        resolved.append((step_def["field"], question_id, option_id, value))
+
+    changed: list[str] = []
+    if resolved:
+        rate_limit_svc.check(f"intake_edit:{ctx.user.id}", limit=5, window_seconds=60)
+        for field_key, question_id, option_id, value in resolved:
+            await _record_answer(
+                session, step1, question_id=question_id, field_key=field_key,
+                # source='edit' (not the chip/free_text the resolver returned)
+                # — this row is a correction to an already-answered question,
+                # not the original answer; distinguishing the two is exactly
+                # what the old single-blob client_profiles.fields_ciphertext
+                # could never record.
+                option_id=option_id, free_text_value=None if option_id is not None else value, source="edit",
+            )
+            changed.append(field_key)
 
     if changed:
         await session.commit()
@@ -620,16 +965,263 @@ async def edit_intake_fields(
     )
 
 
+async def _resolve_chat_plan(
+    session: AsyncSession, ctx: ClientContext, plan_id: uuid.UUID | None
+) -> Plan | None:
+    """Which saved plan a POST /client/chat turn is about, or None.
+
+    Shared by the two things a chat turn does with a plan: inject it as context
+    so the agent can answer questions about it, and decide whether an edit
+    request has anything to edit. Resolving once keeps those two from ever
+    disagreeing about WHICH plan the client meant.
+
+    An explicit plan_id is ownership-checked by plan_svc.get_plan (404 on
+    another seat's plan, exactly like GET /client/plans/{id}); the implicit
+    active-plan path deliberately degrades to None instead, since a dangling
+    engagements.active_plan_id must not make the client unable to chat.
+    """
+    if plan_id is not None:
+        return await plan_svc.get_plan(session, ctx.user, ctx.workspace_id, plan_id)
+    engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
+    return await plan_svc.get_active_plan(
+        session, ctx.user, ctx.workspace_id, engagement.active_plan_id
+    )
+
+
+async def _plan_chat_context(session: AsyncSession, plan: Plan | None) -> str:
+    """The plan block POST /client/chat injects, or "" when this seat has no
+    plan yet (pre-plan chat is unchanged).
+
+    A saved plan lives outside the message thread, so without this the agent
+    answering "ทำไมงบเฟส 2 เท่านี้" has never seen the plan the client is
+    pointing at — see app/services/plan.py's "Plan -> chat context" section.
+    """
+    if plan is None:
+        return ""
+    return await plan_svc.plan_context_for_plan(session, plan)
+
+
+# ---------------------------------------------------------------------------
+# Workspace journey -> chat context
+# ---------------------------------------------------------------------------
+#
+# Steps 1-3 of the engagement produce artifacts that live OUTSIDE the message
+# thread: the interview is intake_answers rows (services/client_intake.py runs
+# it as a deterministic DB flow, not as LLM turns), the market scan is
+# research_findings, the case match is case_matches. The client reads all
+# three in their workspace, but chat_policy.load_history_messages() only ever
+# reads `messages` — so a client who had just spent nine questions explaining
+# their brand hit a chat that knew none of it, and "ทำไมถึงเลือกเคสนี้ให้"
+# hit a model that had never seen the cards on the client's screen.
+#
+# Same hole plan.py's "Plan -> chat context" section closes for a saved plan,
+# and the same fix: rebuild each artifact into a system block every turn,
+# rather than trying to get it into the transcript.
+#
+# Every block is bounded. The comment on chat_policy._HISTORY_CHAR_BUDGET is
+# the reason: past the local model's context window the server has no budget
+# left to generate and returns an EMPTY reply, so context that grows with the
+# client's typing (a pasted free-text answer, a long market scan) has to be
+# cut here rather than silently costing the answer.
+
+
+def _clip(text: str | None, limit: int) -> str:
+    value = (text or "").strip()
+    return value[:limit] + "…" if len(value) > limit else value
+
+
+# Longest single intake answer the profile block copies. The interview is nine
+# questions, so the block is bounded by construction — except for free-text
+# answers, which are whatever the client pasted.
+_INTAKE_CONTEXT_VALUE_CHARS = 400
+
+# Market scan: how many findings, and how long each may be. A scan is ~6-10
+# bullets; the cap is a ceiling on a bad run, not the normal case.
+_RESEARCH_CONTEXT_FINDINGS = 10
+_RESEARCH_CONTEXT_TEXT_CHARS = 300
+
+# Case match: capped at rag_top_k (config.py), i.e. the cards the client is
+# actually looking at. Summaries come from the scraped corpus and can run long,
+# so they are clipped harder than the rationale น้องภูมิ wrote.
+_CASES_CONTEXT_MATCHES = 5
+_CASES_CONTEXT_SUMMARY_CHARS = 240
+_CASES_CONTEXT_RATIONALE_CHARS = 300
+
+
+async def _workspace_chat_context(session: AsyncSession, ctx: ClientContext) -> str:
+    """Everything the client's journey has produced so far, as system context.
+
+    One engagement lookup for all three blocks — a chat turn already pays for
+    plan resolution, RAG and the policy decision, and this is exactly where
+    three more `get_or_create_active` round-trips would otherwise creep in.
+
+    Order is journey order (profile -> market scan -> cases), and client_chat()
+    appends the plan block after these: a plan is answered against the profile
+    it was drafted from, so the profile must not be what ends up furthest from
+    the question.
+    """
+    engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
+    steps = {
+        name: await engagement_svc.get_step(session, engagement.id, name)
+        for name in ("interview", "market", "cases")
+    }
+    blocks = [
+        await _intake_chat_context(session, steps["interview"]),
+        await _research_chat_context(session, steps["market"]),
+        await _cases_chat_context(session, steps["cases"]),
+    ]
+    return "\n\n".join(filter(None, blocks))
+
+
+async def _intake_chat_context(session: AsyncSession, step1: EngagementStep) -> str:
+    """The seat's interview answers, rendered as a system-context block.
+
+    Live answers only (`superseded_at IS NULL`), in script order, so a field
+    corrected via PATCH /client/intake/fields reaches the model with the value
+    the Profile tab shows. Included while the interview is still in progress
+    too — half a profile is still nine questions' worth of things not to ask
+    twice.
+    """
+    turns = await _intake_transcript(session, step1)
+    if not turns:
+        return ""
+
+    lines = [
+        "[CLIENT PROFILE — answers this client already gave in the intake interview]",
+        "These are established facts about this client, collected by น้องภูมิ in "
+        "this workspace. Use them when you answer. Never ask again for anything "
+        "answered here; ask only about what is missing. Reply in Thai unless the "
+        "client writes in another language.",
+        "",
+    ]
+    # _intake_transcript emits (question, answer) pairs in script order.
+    for question, answer in zip(turns[::2], turns[1::2]):
+        lines.append(
+            f"- {question.text.strip()} → {_clip(answer.text, _INTAKE_CONTEXT_VALUE_CHARS)}"
+        )
+    return "\n".join(lines)
+
+
+async def _research_chat_context(session: AsyncSession, step2: EngagementStep) -> str:
+    """The market scan the client has already read, as a system-context block.
+
+    Finished runs only. A running one has no findings yet and a failed one has
+    none at all — either way the client is not looking at numbers the chat
+    would have to explain.
+
+    Findings are reproduced verbatim, [n] markers included, because the source
+    list is reproduced with them: a model that paraphrases a finding and keeps
+    its marker has silently reattributed a claim to a source that does not make
+    it. That is also why the header forbids adding findings — this block is the
+    whole of what น้องภูมิ can evidence about this market.
+    """
+    run = await _latest_research_run(session, step2.id)
+    if run is None or run.status != "done":
+        return ""
+    out = await _research_out(session, run)
+    findings = out["findings"][:_RESEARCH_CONTEXT_FINDINGS]
+    if not findings:
+        return ""
+
+    lines = [
+        "[MARKET SCAN — findings น้องภูมิ already showed this client]",
+        "น้องภูมิ ran this market scan for the client, and the client has read it "
+        "in their workspace. Answer follow-up questions from these findings. "
+        "Keep the [n] citation markers exactly as written, quote a finding "
+        "rather than rephrasing what it claims, and never add a finding that is "
+        "not listed here — say the scan does not cover it instead.",
+        "",
+    ]
+    lines.extend(f"- {_clip(f['text'], _RESEARCH_CONTEXT_TEXT_CHARS)}" for f in findings)
+    citations = out["citations"]
+    if citations:
+        lines.append("Sources:")
+        lines.extend(f"[{c['index']}] {c['source']}" for c in citations)
+    return "\n".join(lines)
+
+
+async def _cases_chat_context(session: AsyncSession, step3: EngagementStep) -> str:
+    """The matched case studies on the client's screen, as system context.
+
+    `score` is handed over exactly as the card shows it (already rounded by
+    _case_matches_for_run): a chat turn quoting a different figure than the
+    card next to it reads as น้องภูมิ contradicting itself, not as rounding.
+
+    The header pins where the ranking came from — a bge-m3 + tag-model score
+    over the case corpus (services/case_match.py), not the chat model's
+    judgement — so the chat explains a rank it must not re-derive.
+    """
+    run = await _latest_case_run(session, step3.id)
+    if run is None or run.status != "done":
+        return ""
+    matches = (await _case_matches_for_run(session, run.id))["matches"][:_CASES_CONTEXT_MATCHES]
+    if not matches:
+        return ""
+
+    lines = [
+        "[MATCHED CASE STUDIES — the cards this client is looking at]",
+        "น้องภูมิ matched these Brandbiz case studies to this client's profile, "
+        "ranked best first. The score is a similarity number produced by the "
+        "matching engine, not your judgement: quote it exactly, explain a match "
+        "from the rationale and the fields below, and never re-rank the cards or "
+        "offer a case that is not listed here.",
+        "",
+    ]
+    for i, m in enumerate(matches, start=1):
+        head = f"{i}. {m['title'] or m['filename']}"
+        if m["client"]:
+            head += f" — {m['client']}"
+        head += f" (score {m['score']})"
+        lines.append(head)
+        if m["category"]:
+            lines.append(f"   Category: {m['category']}")
+        if m["matched_on"]:
+            lines.append(f"   ตรงกับ: {', '.join(m['matched_on'])}")
+        summary = _clip(m["summary"], _CASES_CONTEXT_SUMMARY_CHARS)
+        if summary:
+            lines.append(f"   Summary: {summary}")
+        rationale = _clip(m["rationale"], _CASES_CONTEXT_RATIONALE_CHARS)
+        if rationale:
+            lines.append(f"   Why it matched: {rationale}")
+    return "\n".join(lines)
+
+
+async def _suggest_plan_edit(
+    session: AsyncSession, ctx: ClientContext, plan: Plan | None, content: str
+) -> bool:
+    """Should this chat turn offer the "ปรับแผนให้เลย" chip?
+
+    Three conditions, cheapest first: the turn reads as an edit request, there
+    is a saved plan to edit, and the intake is finished. The last one is checked
+    server-side rather than trusted from the frontend for the same reason
+    POST /client/plan/draft checks it — a plan revised against a half-answered
+    profile is a plan drafted from nothing.
+
+    A True here only surfaces a chip. Nothing is revised until the client
+    confirms and the frontend calls POST /client/plan/revise, so a false
+    positive costs one ignorable chip and never a silent rewrite of a budget.
+    """
+    if plan is None or not plan_edit_intent.detect(content):
+        return False
+    engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
+    step1 = await engagement_svc.get_step(session, engagement.id, "interview")
+    return step1.status == "done"
+
+
 @router.post("/chat")
 async def client_chat(
     body: ClientChatIn,
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> StreamingResponse:
-    _require_enabled()
     agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
     if agent is None:
         raise HTTPException(status_code=503, detail="This workspace has no assigned agent yet")
+
+    plan = await _resolve_chat_plan(session, ctx, body.plan_id)
+    plan_context = await _plan_chat_context(session, plan)
+    workspace_context = await _workspace_chat_context(session, ctx)
+    edit_suggested = await _suggest_plan_edit(session, ctx, plan, body.content)
 
     prepared = await prepare_chat(
         session=session,
@@ -639,6 +1231,10 @@ async def client_chat(
         requested_model="auto",
         agent_id=agent.id,  # forced — never trust a client-supplied agent_id
         workspace_id=ctx.workspace_id,
+        # Journey first, plan last: the plan block's money rules are then
+        # the last thing the model reads before the history, and the plan
+        # is read against the profile it was drafted from.
+        extra_context="\n\n".join(filter(None, [workspace_context, plan_context])),
     )
     return StreamingResponse(
         run_chat_stream(
@@ -657,6 +1253,11 @@ async def client_chat(
             citations=prepared.citations,
             system_prompt=prepared.system_prompt,
             tuning=prepared.tuning,
+            # Surfaces as an SSE notice the frontend turns into a confirmation
+            # chip. The plan id rides along so the confirm posts against the
+            # plan this turn was actually resolved against, not whatever is
+            # active by the time the client taps it.
+            plan_edit_plan_id=plan.id if edit_suggested and plan is not None else None,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -674,6 +1275,42 @@ _RESEARCH_SYSTEM_PROMPT = (
 )
 
 
+def _build_research_query(fields_th: Mapping[str, str]) -> str:
+    """The market scan's USER turn — deliberately Thai end to end.
+
+    The system prompt above already asks for Thai, but Perplexity's Sonar
+    weights the user turn (and the sources its web search retrieves off that
+    turn) far more heavily than a system message. An all-English user turn made
+    it search English sources and answer in English regardless. So the language
+    instruction is repeated here and the business context is rendered with Thai
+    labels + the Thai chip labels the client actually clicked — same pattern as
+    plan.py::_build_drafting_prompt, which is the one prompt in this repo that
+    has reliably produced Thai.
+
+    Pure (takes an already-loaded fields dict) so it is unit-testable without a
+    DB — see tests/unit/test_research_prompt.py.
+    """
+    ordered = [step["field"] for step in intake_svc.INTAKE_SCRIPT]
+    # Same reason as case_match.build_context_query: an engagement pinned to
+    # an older script version answers slots the current script no longer has
+    # (v1's goal / horizon / history), and dropping them would send a
+    # thinner brief to the market scan than the client actually gave.
+    ordered += sorted(k for k in fields_th if k not in set(ordered))
+    context = "; ".join(
+        f"{intake_svc.THAI_FIELD_LABELS.get(k, k)}: {fields_th[k]}"
+        for k in ordered
+        if k in fields_th
+    )
+    return (
+        "ช่วยวิเคราะห์ตลาดและคู่แข่งของธุรกิจนี้ให้หน่อยครับ "
+        "ขอข้อมูลที่เป็นรูปธรรม ทันสมัย และนำไปใช้ได้จริงในแผนที่จะนำเสนอลูกค้า\n"
+        "ตอบเป็นภาษาไทยทั้งหมด เป็นภาษาธุรกิจที่นักวางกลยุทธ์แบรนด์ใช้คุยกับลูกค้า "
+        "(ชื่อแบรนด์ ชื่อบริษัท ชื่อรายงาน/สำนักที่เผยแพร่ และชื่อตัวชี้วัด ให้คงภาษาเดิมไว้ "
+        "และคงเครื่องหมายอ้างอิง [n] ไว้ตามเดิม)\n\n"
+        f"ข้อมูลธุรกิจ: {context}"
+    )
+
+
 @router.post("/research")
 async def run_research(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
@@ -682,8 +1319,10 @@ async def run_research(
     """The "External market scan · IAG" step. IAG ≈ Perplexity (per
     DSME_ai.md's mapping) — routed through PolicyEngine.decide() at the
     Perplexity model code exactly like an internal user's chat would be.
+
+    Prompted in Thai on BOTH turns (see _build_research_query) — the system
+    message alone wasn't enough to stop Sonar answering in English.
     """
-    _require_enabled()
     user = ctx.user
     engagement = await engagement_svc.get_or_create_active(session, user, ctx.workspace_id)
     step1 = await engagement_svc.get_step(session, engagement.id, "interview")
@@ -691,12 +1330,7 @@ async def run_research(
         raise HTTPException(status_code=400, detail="Complete the intake before running research")
     step2 = await engagement_svc.get_step(session, engagement.id, "market")
 
-    fields = await _load_fields(session, step1)
-    query = (
-        "Research the current market and competitor landscape for this business, "
-        "with concrete, recent, actionable findings a brand strategist could use "
-        "in a client-facing plan. Business context: " + case_match_svc.build_context_query(fields)
-    )
+    query = _build_research_query(await _load_fields_th(session, step1))
 
     tier = detect_tier(query)
     estimated_tokens = max(1, len(query) // 4)
@@ -796,8 +1430,13 @@ async def run_case_match(
     rows every call, destroying match history). Readers always take the
     LATEST done run for this engagement's step, so a re-run still can't
     leak stale/duplicate cases into a drafted plan.
+
+    Calls match_cases(strict=True): an embed-server outage must surface as
+    a real failure here, not as "no case studies matched closely enough"
+    (rag_search.retrieve()'s default strict=False degrades chat to a
+    non-RAG answer, which is right for chat but would misreport an outage
+    as "the library has nothing relevant" for this endpoint).
     """
-    _require_enabled()
     user = ctx.user
     engagement = await engagement_svc.get_or_create_active(session, user, ctx.workspace_id)
     step1 = await engagement_svc.get_step(session, engagement.id, "interview")
@@ -809,26 +1448,47 @@ async def run_case_match(
     agent_file_ids = await agent_svc.get_agent_file_ids(session, agent.id) if agent else None
 
     fields = await _load_fields(session, step1)
+    query = case_match_svc.build_context_query(fields)
     await engagement_svc.mark_step(session, step3, "running")
 
-    match_run = await case_match_svc.match_cases(
-        session,
-        user,
-        fields,
-        agent_file_ids=agent_file_ids,
-        effective_workspace_id=ctx.workspace_id,
-    )
-
-    ct, nonce, tag, kv = crypto.encrypt(match_run.query)
+    ct, nonce, tag, kv = crypto.encrypt(query)
     run = CaseMatchExecution(
         engagement_step_id=step3.id,
         query_ciphertext=ct, query_nonce=nonce, query_tag=tag, key_version=kv,
-        status="done", match_count=len(match_run.results), completed_at=datetime.now(timezone.utc),
+        status="running",
     )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+
+    try:
+        match_run = await case_match_svc.match_cases(
+            session,
+            user,
+            fields,
+            agent_file_ids=agent_file_ids,
+            effective_workspace_id=ctx.workspace_id,
+            query=query,
+            strict=True,
+        )
+    except EmbeddingError as exc:
+        run.status = "failed"
+        run.error_detail = str(exc)[:500]
+        await session.commit()
+        await engagement_svc.mark_step(
+            session, step3, "failed", error_code="embed_unreachable", error_detail=str(exc)[:500]
+        )
+        raise HTTPException(
+            status_code=502, detail="Case matching is temporarily unavailable"
+        ) from exc
+
+    run.status = "done"
+    run.match_count = len(match_run.results)
+    run.completed_at = datetime.now(timezone.utc)
     session.add(run)
     await session.flush()
 
-    rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None]] = []
+    rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None, str | None]] = []
     for r in match_run.results:
         case_study = (
             await session.execute(select(CaseStudy).where(CaseStudy.file_id == r.file_id))
@@ -852,9 +1512,10 @@ async def run_case_match(
         match = CaseMatch(
             case_match_run_id=run.id, case_study_id=case_study.id, rank=r.rank,
             score=r.score, rationale=r.rationale,
+            score_breakdown=_breakdown_json(r),
         )
         session.add(match)
-        rows.append((match, r.filename, r.file_id, r.card))
+        rows.append((match, r.filename, r.file_id, r.card, case_study.image_url))
     await session.commit()
 
     await engagement_svc.mark_step(session, step3, "done")
@@ -954,6 +1615,56 @@ async def _plan_out(session: AsyncSession, plan, *, agent_name: str | None = Non
     )
 
 
+class ClientPlanReviseIn(BaseModel):
+    # What the client typed, verbatim — one line, not a prompt. Bounded because
+    # it is pasted into the revision prompt alongside the whole plan and the
+    # rate card, and the local model's context window is the real budget here.
+    instruction: str = Field(min_length=1, max_length=2000)
+    # Same resolution rule as ClientChatIn.plan_id: omitted → the engagement's
+    # active plan.
+    plan_id: uuid.UUID | None = None
+
+
+@router.post("/plan/revise")
+async def revise_plan_from_chat(
+    body: ClientPlanReviseIn,
+    ctx: Annotated[ClientContext, Depends(require_client_context)],
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    """Apply a client's plain-language edit to their plan and commit it as the
+    next version.
+
+    Unlike POST /client/plan/draft this SAVES: the client already confirmed
+    (the chip that routed them here), so a second Save step would be
+    confirmation theatre. PlanVersion is append-only, so version history is the
+    undo — and plan_svc.revise_plan never touches plan.status, meaning a
+    chat-revised plan stays "draft · awaiting expert review" exactly like the
+    original.
+
+    The intake gate is the same one POST /client/plan/draft enforces, and for
+    the same reason: it is checked here rather than trusted from the frontend.
+    """
+    engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
+    step1 = await engagement_svc.get_step(session, engagement.id, "interview")
+    if step1.status != "done":
+        _logger.warning(
+            "plan/revise: workspace %s user %s intake incomplete at step %d",
+            ctx.workspace_id, ctx.user.id, step1.progress_current or 0,
+        )
+        raise HTTPException(status_code=400, detail="Complete the intake before editing a plan")
+
+    plan = await _resolve_chat_plan(session, ctx, body.plan_id)
+    if plan is None:
+        # 409, not 404: nothing is missing at the URL the client asked for —
+        # this seat simply has no saved plan yet, which the frontend recovers
+        # from by offering "draft a plan" rather than showing an error.
+        raise HTTPException(status_code=409, detail="Save a plan before editing it")
+
+    return await plan_svc.revise_from_instruction(
+        session, ctx.user, ctx.workspace_id, engagement, plan, body.instruction
+    )
+
+
 @router.post("/plan/draft")
 async def draft_plan(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
@@ -962,7 +1673,6 @@ async def draft_plan(
     """Draft the 4-part plan but do not save it — the frontend shows this
     as a preview with a "Save as a plan" action (POST /client/plans)
     before it becomes a durable artifact."""
-    _require_enabled()
     engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
     step1 = await engagement_svc.get_step(session, engagement.id, "interview")
     if step1.status != "done":
@@ -991,7 +1701,6 @@ async def save_plan(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> PlanOut:
-    _require_enabled()
     engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
     plan = await plan_svc.save_plan(session, ctx.user, ctx.workspace_id, engagement, body.model_dump())
     step4 = await engagement_svc.get_step(session, engagement.id, "plan")
@@ -1008,7 +1717,6 @@ async def revise_plan(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> PlanOut:
     """Save a re-drafted plan over an existing one (Task 5.11)."""
-    _require_enabled()
     plan = await plan_svc.revise_plan(session, ctx.user, ctx.workspace_id, plan_id, body.model_dump())
     agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
     return await _plan_out(session, plan, agent_name=agent.name if agent else None)
@@ -1019,7 +1727,6 @@ async def list_plans(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[PlanOut]:
-    _require_enabled()
     plans = await plan_svc.list_plans(session, ctx.user, ctx.workspace_id)
     agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
     agent_name = agent.name if agent else None
@@ -1032,7 +1739,6 @@ async def get_plan(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> PlanOut:
-    _require_enabled()
     plan = await plan_svc.get_plan(session, ctx.user, ctx.workspace_id, plan_id)
     rating = await plan_rating_svc.get_rating(session, ctx.user, ctx.workspace_id, plan_id)
     agent = await workspace_svc.get_workspace_agent(session, ctx.workspace_id)
@@ -1048,7 +1754,6 @@ async def get_plan_version(
 ) -> PlanVersionBodyOut:
     """Task 5.12 — the version rail's "read an old version" affordance.
     Read-only: no audit action, no rate limit."""
-    _require_enabled()
     v = await plan_svc.get_version(session, ctx.user, ctx.workspace_id, plan_id, version)
     body = plan_svc.decrypt_version_body(v)
     return PlanVersionBodyOut(
@@ -1070,7 +1775,6 @@ async def rate_plan(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> PlanRatingOut:
-    _require_enabled()
     if ctx.is_preview:
         raise HTTPException(
             status_code=400,
@@ -1094,7 +1798,6 @@ async def activate_plan(
     replacement for the old `bb:activePlan:*` localStorage key (Task 5.12).
     plan_svc.get_plan is the ownership check (404s on a plan this seat
     doesn't own) before engagements.active_plan_id is touched."""
-    _require_enabled()
     plan = await plan_svc.get_plan(session, ctx.user, ctx.workspace_id, plan_id)
     engagement = await engagement_svc.get_or_create_active(session, ctx.user, ctx.workspace_id)
     await engagement_svc.set_active_plan(session, engagement, plan.id)
@@ -1109,7 +1812,6 @@ async def share_plan(
 ) -> dict:
     """Mint (or re-mint) a share token for a plan — GET /public/plans/{token}
     is the read-only page that resolves it."""
-    _require_enabled()
     raw = await plan_svc.create_share_token(session, ctx.user, ctx.workspace_id, plan_id)
     return {"token": raw, "share_path": f"/p/{raw}"}
 
@@ -1131,7 +1833,6 @@ async def submit_lead(
     ctx: Annotated[ClientContext, Depends(require_client_context)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    _require_enabled()
     if ctx.is_preview:
         raise HTTPException(
             status_code=400,

@@ -400,7 +400,67 @@ async def test_reasoning_ignored_when_client_does_not_support_it():
             pass
 
     payload = captured["json"]
-    assert "think" not in payload
+    # Not merely absent: Ollama defaults thinking ON for capable models, and
+    # this adapter drops message.thinking — an unrequested think would burn the
+    # completion budget on tokens nobody ever sees.
+    assert payload["think"] is False
+
+
+# ---------------------------------------------------------------------------
+# Context-window exhaustion: empty reply cut short by done_reason="length"
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_empty_reply_cut_by_length_raises():
+    """Ollama answers a too-long prompt with done_reason="length" and an EMPTY
+    message.content (the whole remaining window went to hidden thinking
+    tokens). Returning "" would look like a successful turn and surface
+    downstream as a nonsense error — e.g. plan drafting reporting that the
+    model's output "is not valid JSON"."""
+    lines = [
+        _make_ndjson_line(
+            "", done=True, done_reason="length", prompt_eval_count=15667, eval_count=717
+        )
+    ]
+    mock_httpx_client, _ = _capturing_client(lines)
+
+    with patch("httpx.AsyncClient", return_value=mock_httpx_client):
+        client = _make_client()
+        with pytest.raises(LLMProviderError) as excinfo:
+            await _collect(client)
+
+    assert "15667" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_partial_reply_cut_by_length_is_returned_not_raised():
+    """A truncated-but-non-empty answer is still an answer — only the
+    zero-content case is a hard failure."""
+    lines = [
+        _make_ndjson_line("half an ans"),
+        _make_ndjson_line("", done=True, done_reason="length", prompt_eval_count=100),
+    ]
+    mock_httpx_client, _ = _capturing_client(lines)
+
+    with patch("httpx.AsyncClient", return_value=mock_httpx_client):
+        client = _make_client()
+        chunks = await _collect(client)
+
+    assert "".join(c.content for c in chunks) == "half an ans"
+
+
+@pytest.mark.asyncio
+async def test_empty_reply_with_stop_reason_is_not_an_error():
+    """done_reason="stop" with no content is the model choosing to say nothing,
+    not a truncation — leave it to the caller."""
+    lines = [_make_ndjson_line("", done=True, done_reason="stop")]
+    mock_httpx_client, _ = _capturing_client(lines)
+
+    with patch("httpx.AsyncClient", return_value=mock_httpx_client):
+        client = _make_client()
+        chunks = await _collect(client)
+
+    assert "".join(c.content for c in chunks) == ""
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,16 @@ class LlamaCppClient(LLMClient):
         if reasoning is not None:
             payload["think"] = True
             merged_options["num_predict"] = _NUM_PREDICT[reasoning]
+        else:
+            # Ollama turns thinking ON BY DEFAULT for any model that advertises
+            # the capability (gemma4, deepseek-r1, …). Those tokens arrive under
+            # message.thinking, which this adapter drops — so they are generated,
+            # counted against the context window, and thrown away. On a long
+            # prompt that is fatal: the whole remaining window goes to hidden
+            # reasoning and the stream ends done_reason="length" with an EMPTY
+            # message.content. Ask for no thinking explicitly; Ollama accepts
+            # think=false on models with and without the capability.
+            payload["think"] = False
         merged_options.update(caller_options)
         if merged_options:
             payload["options"] = merged_options
@@ -116,6 +126,7 @@ class LlamaCppClient(LLMClient):
                             )
 
                         # Native Ollama streams NDJSON — one JSON object per line.
+                        saw_content = False
                         async for line in response.aiter_lines():
                             if not line:
                                 continue
@@ -131,6 +142,8 @@ class LlamaCppClient(LLMClient):
                             prompt_tokens = chunk.get("prompt_eval_count") if done else None
                             completion_tokens = chunk.get("eval_count") if done else None
 
+                            saw_content = saw_content or bool(content)
+
                             yield ChatChunk(
                                 content=content,
                                 model=chunk.get("model"),
@@ -140,6 +153,21 @@ class LlamaCppClient(LLMClient):
                             )
 
                             if done:
+                                if not saw_content and finish_reason == "length":
+                                    # The generation budget ran out before a
+                                    # single content token: the prompt filled
+                                    # the server's context window. Raising is
+                                    # the only way callers see this — an empty
+                                    # string looks like a successful turn and
+                                    # surfaces downstream as a nonsense error
+                                    # (e.g. "model output is not valid JSON").
+                                    raise LLMProviderError(
+                                        "Local model produced no answer: the prompt used "
+                                        f"{prompt_tokens} tokens and left no room in the "
+                                        f"model's context window (server default is "
+                                        f"{(prompt_tokens or 0) + (completion_tokens or 0)} "
+                                        "tokens). Send less conversation history or context."
+                                    )
                                 return
 
                 return

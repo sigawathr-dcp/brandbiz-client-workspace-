@@ -39,6 +39,13 @@ class ChatState(TypedDict, total=False):
     # Pre-loaded by chat_policy.prepare_chat (avoids double-decrypt)
     resolved_conversation_id: uuid.UUID
     history: list[dict]     # {"role": ..., "content": ...} plaintext dicts
+    # Stamped onto both persisted Message rows (messages.engagement_step_id,
+    # migration 0050). None for ordinary chat — including a client's
+    # free-form turns, which is exactly what GET /client/bootstrap replays.
+    # Set only by machine-driven turns that happen to share the engagement's
+    # conversation (services/plan.py::draft_plan sends an ~8k-char prompt and
+    # gets raw JSON back), so the transcript replay can leave them out.
+    engagement_step_id: uuid.UUID | None
     # Set by run_chat_stream when chat_policy authorised an image request.
     # Presence (non-None) tells _route_after_start to go to generate_image_node.
     image_model_code: str | None
@@ -50,6 +57,12 @@ class ChatState(TypedDict, total=False):
     rag_context: str
     # Citation metadata for the SSE "sources" event
     citations: list[dict]
+    # Set by run_chat_stream when routers/client.py judged this turn to be a
+    # request to CHANGE the client's plan. Emitted as a notice so the frontend
+    # can offer a confirmation chip; nothing is revised until the client taps it
+    # and the frontend calls POST /client/plan/revise. The orchestrator never
+    # acts on it — it only carries it.
+    plan_edit_plan_id: uuid.UUID | None
     # Agent system prompt (prepended before RAG context as a "system" message)
     system_prompt: str
     # Per-turn response mode / reasoning level / temperature (G-A1/G-A2).
@@ -116,6 +129,17 @@ async def emit_start(state: ChatState) -> dict:
         await queue.put(json.dumps({
             "type": "sources",
             "sources": citations,
+        }))
+
+    # Offer the plan-edit confirmation before content starts, for the same
+    # reason citations go first: the chip is about the turn as a whole, and a
+    # client who has finished reading the answer has already moved on.
+    plan_edit_plan_id = state.get("plan_edit_plan_id")
+    if plan_edit_plan_id is not None:
+        await queue.put(json.dumps({
+            "type": "notice",
+            "event": "plan_edit_suggested",
+            "plan_id": str(plan_edit_plan_id),
         }))
 
     return result
@@ -203,10 +227,12 @@ async def call_llm(state: ChatState) -> dict:
     latency_ms = int((time.monotonic() - t0) * 1000)
 
     # Persist user message — encrypted at the app boundary (Section 7.1)
+    step_id: uuid.UUID | None = state.get("engagement_step_id")
     ct, nonce, tag, kv = crypto.encrypt(user_content)
     session.add(Message(
         conversation_id=resolved_conv_id,
         role="user",
+        engagement_step_id=step_id,
         content_ciphertext=ct,
         content_nonce=nonce,
         content_tag=tag,
@@ -225,6 +251,7 @@ async def call_llm(state: ChatState) -> dict:
     session.add(Message(
         conversation_id=resolved_conv_id,
         role="assistant",
+        engagement_step_id=step_id,
         content_ciphertext=ct2,
         content_nonce=nonce2,
         content_tag=tag2,
@@ -318,10 +345,12 @@ async def generate_image_node(state: ChatState) -> dict:
     assistant_text = f"![Generated image]({data_url})"
 
     # Persist both messages encrypted (§7.1)
+    step_id: uuid.UUID | None = state.get("engagement_step_id")
     ct, nonce, tag, kv = crypto.encrypt(user_content)
     session.add(Message(
         conversation_id=resolved_conv_id,
         role="user",
+        engagement_step_id=step_id,
         content_ciphertext=ct,
         content_nonce=nonce,
         content_tag=tag,
@@ -332,6 +361,7 @@ async def generate_image_node(state: ChatState) -> dict:
     session.add(Message(
         conversation_id=resolved_conv_id,
         role="assistant",
+        engagement_step_id=step_id,
         content_ciphertext=ct2,
         content_nonce=nonce2,
         content_tag=tag2,
@@ -478,6 +508,7 @@ async def run_chat_collect(
     citations: list[dict] | None = None,
     system_prompt: str = "",
     tuning: GenerationTuning | None = None,
+    engagement_step_id: uuid.UUID | None = None,
 ) -> dict:
     """Non-streaming variant of run_chat_stream — drives the same LangGraph and
     returns the full response as a plain dict.
@@ -513,6 +544,7 @@ async def run_chat_collect(
         "citations": citations or [],
         "system_prompt": system_prompt,
         "tuning": tuning or GenerationTuning(),
+        "engagement_step_id": engagement_step_id,
     }
     await _chat_graph.ainvoke(state)
 
@@ -702,6 +734,7 @@ async def run_chat_stream(
     citations: list[dict] | None = None,
     system_prompt: str = "",
     tuning: GenerationTuning | None = None,
+    plan_edit_plan_id: uuid.UUID | None = None,
 ) -> AsyncIterator[str]:
     """Async generator that drives the LangGraph and yields SSE-formatted lines.
 
@@ -727,6 +760,7 @@ async def run_chat_stream(
         "citations": citations or [],
         "system_prompt": system_prompt,
         "tuning": tuning or GenerationTuning(),
+        "plan_edit_plan_id": plan_edit_plan_id,
     }
     graph_task = asyncio.create_task(_run_graph_safe(state))
     deadline = asyncio.get_event_loop().time() + 1800  # 30-minute hard cap
