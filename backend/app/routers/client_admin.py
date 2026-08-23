@@ -19,12 +19,11 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db import get_db
 from app.deps import require_admin
 from app.models.file import File
@@ -36,9 +35,9 @@ from app.services import workspace as workspace_svc
 router = APIRouter(prefix="/admin/clients", tags=["client-workspaces"])
 
 
-def _require_enabled() -> None:
-    if not settings.client_surface_enabled:
-        raise HTTPException(status_code=503, detail="Client workspaces are disabled")
+# The CLIENT_SURFACE_ENABLED kill switch is enforced by
+# Depends(require_client_surface) at include_router() level in main.py, not
+# per handler — see app/deps.py::require_client_surface for why.
 
 
 class WorkspaceCreate(BaseModel):
@@ -99,7 +98,6 @@ async def create_workspace(
     admin: Annotated[User, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> WorkspaceOut:
-    _require_enabled()
     ws = await workspace_svc.create_workspace(
         session,
         name=body.name,
@@ -130,7 +128,6 @@ async def create_invite(
     admin: Annotated[User, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> InviteCreated:
-    _require_enabled()
     invite, raw = await workspace_svc.create_invite(
         session,
         workspace_id=workspace_id,
@@ -171,7 +168,6 @@ async def assign_agent(
     /agent/create UI) to this client workspace — it becomes the workspace's
     น้องภูมิ persona, reachable via GET /client/bootstrap. No separate
     "client agent" authoring flow exists."""
-    _require_enabled()
     await workspace_svc.assign_agent(
         session, workspace_id=workspace_id, agent_id=body.agent_id, admin_id=admin.id
     )

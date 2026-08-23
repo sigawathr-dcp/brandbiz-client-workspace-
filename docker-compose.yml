@@ -51,6 +51,10 @@ services:
       FILE_STORAGE_DIR: /data/files
       COOKIE_SECURE: "false"
       CORS_ORIGINS: '["http://localhost:3100"]'
+      # D21/D22 — event kill switch for /client/*, /public/*, /admin/clients/*.
+      # On by default; must be wired here because the container has no .env
+      # file (pydantic's env_file is a no-op inside the image).
+      CLIENT_SURFACE_ENABLED: ${CLIENT_SURFACE_ENABLED:-true}
       # D23 — let client-workspace seats use the full internal app. Off by
       # default; see .env.example for details.
       CLIENT_INTERNAL_ACCESS_ENABLED: ${CLIENT_INTERNAL_ACCESS_ENABLED:-false}

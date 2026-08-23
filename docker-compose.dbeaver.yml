@@ -1,0 +1,14 @@
+# Local-only override: publish Postgres on the host so a GUI client (DBeaver,
+# TablePlus, pgAdmin) can connect. The base compose keeps postgres on the
+# `internal` network with no host port — this file is opt-in, never merged
+# into the base stack:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dbeaver.yml up -d postgres
+#
+# Host port follows this fork's +100 convention (5432 -> 5532) so it can run
+# alongside brandbiz-ai-gateway and any host-installed Postgres. Bound to
+# 127.0.0.1 so the database is not reachable from the LAN.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5532:5432"

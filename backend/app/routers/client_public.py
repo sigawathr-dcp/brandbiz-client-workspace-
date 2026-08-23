@@ -15,11 +15,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db import get_db
 from app.routers.auth import _create_jwt, _set_jwt_cookie, _user_response
 from app.services import plan as plan_svc
@@ -51,9 +50,6 @@ async def redeem(
     auth check (get_current_user, require_client_context, middleware.ts)
     works unmodified for a client seat.
     """
-    if not settings.client_surface_enabled:
-        raise HTTPException(status_code=503, detail="Client workspaces are disabled")
-
     seat, workspace = await workspace_svc.redeem_invite(session, raw_token=body.token)
 
     token = _create_jwt(seat)
@@ -75,9 +71,6 @@ async def get_shared_plan(
     only ever set by the owning seat via POST /client/plans/{id}/share
     (Phase 6) — a plan with no share token is unreachable here regardless of
     its id."""
-    if not settings.client_surface_enabled:
-        raise HTTPException(status_code=503, detail="Client workspaces are disabled")
-
     plan = await plan_svc.get_plan_by_share_token(session, token)
     version = await plan_svc.get_current_version(session, plan)
     body = plan_svc.decrypt_body(version)
