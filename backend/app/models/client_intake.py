@@ -36,6 +36,7 @@ Changes from the pre-redesign shape:
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from datetime import datetime
 
 from sqlalchemy import (
@@ -45,13 +46,14 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     LargeBinary,
+    Numeric,
     SmallInteger,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -189,6 +191,57 @@ class CaseStudy(Base):
     )
 
 
+
+class CaseStudyTag(Base):
+    """One controlled-vocabulary tag on one case study — the corpus side of
+    the weighted matcher (migration 0061).
+
+    Many-to-many per dimension on purpose: a campaign can serve two
+    audiences and answer three challenges, and forcing a single value would
+    make every multi-purpose case score badly against clients it fits.
+
+    `tag_type` is a scoring dimension and `tag_value` a token, both from
+    app/services/case_taxonomy.py — the SAME namespace intake_options.
+    tag_value uses. There is no DB constraint on either (the vocabulary is
+    derived from the active intake script, so pinning it would mean a
+    migration per new option); validate_tag() guards ingest instead.
+
+    `confidence` is 1.00 for a human assertion and lower for a
+    model-proposed tag a human let stand, kept so the eval harness can ask
+    whether low-confidence tags move ranks before anyone trusts them.
+    """
+
+    __tablename__ = "case_study_tags"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_study_id", "tag_type", "tag_value",
+            name="uq_case_study_tags_case_type_value",
+        ),
+        CheckConstraint(
+            "confidence > 0 AND confidence <= 1",
+            name="ck_case_study_tags_confidence",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    case_study_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("case_studies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tag_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tag_value: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(
+        Numeric(3, 2), nullable=False, server_default="1.00"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class CaseMatchExecution(Base):
     """One run of case-library retrieval against a client's profile. A run
     row exists even at zero matches, so bootstrap can tell "never ran"
@@ -255,6 +308,12 @@ class CaseMatch(Base):
     # separately); this column's meaning is unchanged by this redesign.
     score: Mapped[float] = mapped_column(Float, nullable=False)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Per-dimension contributions behind `score` — see
+    # app/services/case_score.py::CaseScore. Without it a stored match is an
+    # unexplainable float and "why did this rank first for that client" is
+    # unanswerable after the fact. NULL on rows written before 0061 and on
+    # any match scored with the tag model disabled (alpha = 0).
+    score_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

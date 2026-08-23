@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -34,6 +35,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     LargeBinary,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -46,6 +48,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base
 
 VALID_ANSWER_SOURCES: frozenset[str] = frozenset({"chip", "free_text", "edit"})
+VALID_USE_MODES: frozenset[str] = frozenset({"match", "feasibility"})
 
 
 class IntakeScript(Base):
@@ -92,6 +95,27 @@ class IntakeQuestion(Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     insight: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # The interview sheet's columns F/G/H, carried per script version so a
+    # reweight publishes a new version instead of editing code (migration
+    # 0059). `match_tag` is the case_study_tags.tag_type this question's
+    # answer scores against; `weight` is its share of the match score.
+    #
+    # `use_mode` is one of three (widened from two by migration 0062):
+    #   'match'            — weighted into the case-match score.
+    #   'feasibility'      — sizes scope and pricing AFTER a plan exists
+    #                        (timeframe, budget).
+    #   'solution_trigger' — decides that a plan must contain a workstream at
+    #                        all (own_commerce); see services/solution_trigger.
+    # `weight` is NULL for everything except 'match', enforced by
+    # ck_intake_questions_weight_use_mode. Across one script the non-NULL
+    # weights sum to 1.000.
+    match_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    weight: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    use_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="match"
+    )
+    dev_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class IntakeOption(Base):
     __tablename__ = "intake_options"
@@ -111,6 +135,12 @@ class IntakeOption(Base):
     ordinal: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     label: Mapped[str] = mapped_column(Text, nullable=False)  # Thai chip text
     value: Mapped[str] = mapped_column(String(255), nullable=False)  # English stored value
+    # Controlled-vocabulary token (app/services/case_taxonomy.py) — the stable
+    # identity of an option. Matching keys off this, never off `ordinal` or
+    # `label`, so reordering or rewording column D of the sheet in a future
+    # script version cannot silently reinterpret a stored answer. NULL on
+    # script v1, which predates the tag model.
+    tag_value: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class IntakeAnswer(Base):

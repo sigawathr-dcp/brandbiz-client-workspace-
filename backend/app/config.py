@@ -50,6 +50,25 @@ class Settings(BaseSettings):
     file_storage_dir: str = "./data/files"     # local blob storage root (volume-mounted)
     max_upload_bytes: int = 50 * 1024 * 1024   # 50 MB per file
 
+    # Weighted case matching (app/services/case_score.py). The score a client
+    # sees is alpha * weighted-tag-score + (1 - alpha) * cosine-similarity.
+    # alpha = 0 reproduces the pre-tagging behaviour exactly — the rollback
+    # path and the eval harness's A/B baseline.
+    case_match_tag_weight: float = 0.7
+    # Candidate pool for rescoring. rag_top_k is a CHUNK budget applied
+    # before any weighting, so leaving it at 5 would let cosine pre-select
+    # the shortlist and make the weights decorative. Retrieval widens to this
+    # many chunks with the distance ceiling disabled, then the weighted score
+    # decides what actually surfaces.
+    case_match_pool_chunks: int = 200
+    # Floor on the blended score; below this a case is not shown at all.
+    case_match_min_score: float = 0.15
+    # How many cases the client is shown after rescoring. 3 per
+    # Matching_logic.xlsx ("Top 3 cases" / "Rank 2–3 Case") — the AE has to
+    # be able to explain every card that surfaces, so the list is kept to
+    # what a person will actually argue for.
+    case_match_top_n: int = 3
+
     # External APIs (Phase 2+)
     anthropic_api_key: str = ""
     openai_api_key: str = ""

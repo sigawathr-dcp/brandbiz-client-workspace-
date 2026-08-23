@@ -104,6 +104,40 @@ class TestBuildContextQuery:
 
         assert query == f"{FIELD_LABELS['industry']}: Retail + online"
 
+    def test_v1_only_fields_are_kept_not_silently_dropped(self):
+        # Engagements pin the script version they were interviewed with, so a
+        # v1 engagement still answers goal / horizon / history after v2
+        # renamed those slots. Filtering to the CURRENT script's keys would
+        # quietly shrink an old client's query and change which cases they
+        # match — the bug this appends-unknown-keys behaviour prevents.
+        fields = {
+            "industry": "Beauty / skincare / cosmetics",
+            "goal": "Grow sales / expand",
+            "horizon": "6 months",
+            "history": "One freelance logo project",
+        }
+
+        query = build_context_query(fields)
+
+        assert "Grow sales / expand" in query
+        assert "6 months" in query
+        assert "One freelance logo project" in query
+        # Current-script fields still lead; unknown keys trail sorted by KEY
+        # (goal, history, horizon), which is what makes the order stable
+        # regardless of how the caller built the dict.
+        assert query.index("Business:") < query.index("Goal:")
+        assert query.index("Goal:") < query.index("Brand history:") < query.index("Horizon:")
+
+    def test_v1_and_v2_fields_coexist_without_duplication(self):
+        fields = {"industry": "Beauty / skincare / cosmetics", "objective": "Build brand awareness",
+                  "goal": "Grow sales / expand"}
+
+        query = build_context_query(fields)
+
+        assert query.count("Business:") == 1
+        assert "Objective: Build brand awareness" in query
+        assert "Goal: Grow sales / expand" in query
+
     def test_covers_every_intake_script_field(self):
         # FIELD_LABELS and INTAKE_SCRIPT must stay in sync — a field present
         # in the script but missing a label would silently fall back to its

@@ -47,6 +47,8 @@ from sqlalchemy import select
 
 from app.eval import corpus as corpus_mod
 from app.eval import goldens
+from app.models.client_intake import CaseStudy
+from app.models.file import File
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.services import agent as agent_svc
@@ -194,13 +196,35 @@ async def main() -> None:
             writer.writerows(sheet_rows)
         print(f"\nWrote labeling sheet: {out_path} ({len(sheet_rows)} rows)")
 
+        # Descriptive columns come from the case_studies catalog, which covers
+        # the whole corpus, and fall back to a retrieved card only where the
+        # catalog is silent. Sourcing them from `card_by_filename` alone would
+        # leave a file blank whenever it happened not to surface for any golden
+        # profile — and `category` is what scripts/tag_case_studies.py
+        # --industry derives from, so a blank there silently drops that case's
+        # industry tag on the next run.
+        catalog_rows = (
+            await session.execute(
+                select(File.filename, CaseStudy.title, CaseStudy.client_name, CaseStudy.category)
+                .join(CaseStudy, CaseStudy.file_id == File.id)
+                .where(File.filename.in_(list(filename_map)))
+            )
+        ).all()
+        catalog_by_filename = {r[0]: r for r in catalog_rows}
+
+        def described(fn: str, index: int, attr: str) -> str | None:
+            row = catalog_by_filename.get(fn)
+            if row is not None and row[index]:
+                return row[index]
+            return getattr(card_by_filename.get(fn), attr, None)
+
         manifest_entries = [
             corpus_mod.ManifestEntry(
                 filename=fn,
                 sha256=next((cf.sha256_hash for cf in report.files if cf.filename == fn), "") or "",
-                title=getattr(card_by_filename.get(fn), "title", None),
-                client=getattr(card_by_filename.get(fn), "client", None),
-                category=getattr(card_by_filename.get(fn), "category", None),
+                title=described(fn, 1, "title"),
+                client=described(fn, 2, "client"),
+                category=described(fn, 3, "category"),
                 chunk_count=chunk_count_by_filename.get(fn, 0),
             )
             for fn in filename_map

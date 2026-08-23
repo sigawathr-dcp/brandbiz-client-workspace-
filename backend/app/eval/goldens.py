@@ -21,25 +21,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.client_intake import INTAKE_SCRIPT
+from app.services.client_intake import INTAKE_SCRIPT, THAI_FIELD_LABELS
 
 # backend/app/eval/goldens.py -> parents[2] == backend/
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_PROFILES_PATH = _BACKEND_DIR / "eval" / "case_match" / "profiles.json"
 DEFAULT_LABELS_PATH = _BACKEND_DIR / "eval" / "case_match" / "labels.csv"
 
-# Short Thai labels for the labeling-sheet profile summary column — deliberately
-# separate from FIELD_LABELS (English, used in the production query string).
-THAI_FIELD_LABELS: dict[str, str] = {
-    "industry": "ธุรกิจ",
-    "stage": "ระยะ",
-    "audience": "ลูกค้า",
-    "challenge": "ปัญหา",
-    "goal": "เป้าหมาย",
-    "horizon": "กรอบเวลา",
-    "budget": "งบ",
-    "history": "ประสบการณ์",
-}
+# THAI_FIELD_LABELS now lives in client_intake next to FIELD_LABELS (the
+# market-scan prompt reads it too, so the labeling sheet and the prompt can't
+# drift apart). Imported above and used by profile_thai_summary(); still
+# importable from this module, which is where query_variants.py reads it.
 
 _VALID_LABELS = {0, 1, 2}
 

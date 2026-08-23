@@ -2,13 +2,16 @@
 
 intake_scripts -> intake_questions -> intake_options replaces the Python
 literal INTAKE_SCRIPT (app/services/client_intake.py) as the runtime
-source of truth for the interview's 8 questions. INTAKE_SCRIPT itself
-stays in that module as the SEED data this migration reads — see its
-docstring for why: reordering or inserting a question in a future
-INTAKE_SCRIPT edit now publishes a new `intake_scripts` version rather
-than silently reinterpreting every engagement's already-stored answers
-(each engagement pins the script version it was given via
-engagements.intake_script_id).
+source of truth for the interview's questions. Reordering or inserting a
+question now publishes a new `intake_scripts` version rather than silently
+reinterpreting every engagement's already-stored answers (each engagement
+pins the script version it was given via engagements.intake_script_id).
+
+The version-1 script is FROZEN as _V1_SCRIPT below rather than imported
+from app.services.client_intake. That module's INTAKE_SCRIPT means "the
+current script" and has since moved on to v2 (migration 0060); importing
+it here would make a fresh `alembic upgrade head` seed v2 content under
+version = 1. A migration's data must be immutable, so it is inlined.
 
 Also backfills intake_script_id onto every engagement created by 0051
 (that migration ran before this catalog existed).
@@ -26,6 +29,107 @@ revision: str = "0052_intake_catalog"
 down_revision: Union[str, None] = "0051_engagements_backfill"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+
+_V1_SCRIPT: list[dict] = [
+    {
+        "field": "industry",
+        "question": (
+            "สวัสดีครับ ผมน้องภูมิ ที่ปรึกษาแบรนด์ของ Brandbiz ครับ 🙂\n"
+            "ผมจะถามเรื่องธุรกิจของคุณ 8 ข้อ แล้วไปหาข้อมูลตลาดมาให้ "
+            "ก่อนจะร่างแผนพร้อมประมาณงบให้ครับ\n\n"
+            "ข้อแรก — ธุรกิจของคุณทำอะไรครับ?"
+        ),
+        "options": [
+            {"label": "ร้านอาหาร / คาเฟ่", "value": "Food & beverage / café"},
+            {"label": "ค้าปลีก + ขายออนไลน์", "value": "Retail + online"},
+            {"label": "ธุรกิจบริการ / B2B", "value": "Services / B2B"},
+            {"label": "ความงาม / สุขภาพ", "value": "Beauty / health & wellness"},
+            {"label": "ท่องเที่ยว / โรงแรม", "value": "Tourism / hospitality"},
+            {"label": "อื่น ๆ — ผมพิมพ์เอง", "value": "Other (typed)"},
+        ],
+        "insight": "รู้ประเภทธุรกิจแล้วครับ — น้องภูมิ จะเทียบเคสจากไลบรารีเฉพาะหมวดเดียวกัน แทนที่จะเดาแบบกว้าง ๆ",
+    },
+    {
+        "field": "stage",
+        "question": "รับทราบครับ ธุรกิจของคุณอยู่ในระยะไหนแล้วครับ?",
+        "options": [
+            {"label": "โตแล้ว กำลังอยากขยาย", "value": "Growing, ready to expand"},
+            {"label": "เปิดใหม่ ไม่เกิน 1 ปี", "value": "Under 1 year old"},
+            {"label": "อยู่ตัวแล้ว แต่ยอดนิ่ง", "value": "Established, flat revenue"},
+            {"label": "กำลังจะเปิด ยังไม่เริ่มขาย", "value": "Pre-launch"},
+        ],
+        "insight": "ระยะของธุรกิจบอกลำดับความสำคัญของแผนได้เยอะครับ — ธุรกิจที่โตแล้วมักพลาดตรงขยายก่อนที่รายได้ประจำจะนิ่ง",
+    },
+    {
+        "field": "audience",
+        "question": "เข้าใจแล้วครับ กลุ่มลูกค้าหลักของคุณคือใครครับ — คนแบบไหนที่เดินเข้ามาบ่อยที่สุด?",
+        "options": [
+            {"label": "คนวัยทำงานในเมือง", "value": "Urban working adults"},
+            {"label": "นักเรียน นักศึกษา", "value": "Students"},
+            {"label": "ครอบครัว และคนในละแวก", "value": "Families & neighbourhood"},
+            {"label": "ลูกค้าธุรกิจ (B2B)", "value": "Business customers (B2B)"},
+            {"label": "นักท่องเที่ยว / ชาวต่างชาติ", "value": "Tourists / foreigners"},
+        ],
+        "insight": "รู้กลุ่มเป้าหมายแล้ว — ข้อมูลตลาดที่น้องภูมิ จะไปค้นต่อจะกรองเฉพาะพฤติกรรมของคนกลุ่มนี้ ไม่ใช่ภาพรวมทั้งตลาด",
+    },
+    {
+        "field": "challenge",
+        "question": "ขอบคุณครับ 🙏 อะไรคือปัญหาใหญ่ที่สุดของคุณตอนนี้ครับ?",
+        "options": [
+            {"label": "คนยังไม่รู้จักแบรนด์", "value": "Low brand awareness"},
+            {"label": "ยอดขายนิ่ง ไม่โตเท่าที่ควร", "value": "Flat / slow sales growth"},
+            {"label": "กำไรบางเกินไป", "value": "Thin margins"},
+            {"label": "คู่แข่งเยอะ หาจุดต่างยาก", "value": "Hard to differentiate from competitors"},
+            {"label": "ช่องทางออนไลน์ยังไม่เวิร์ค", "value": "Online channels underperforming"},
+        ],
+        "insight": "ปัญหานี้คือสิ่งที่แผนจะแก้ก่อนเป็นอันดับแรก — เคสในไลบรารีที่แก้ปัญหาแบบเดียวกันจะถูกดึงมาเทียบให้",
+    },
+    {
+        "field": "goal",
+        "question": "ชัดเจนครับ แล้วเป้าหมายทางธุรกิจปีนี้ของคุณคืออะไรครับ?",
+        "options": [
+            {"label": "เพิ่มยอดขาย / ขยายสาขา", "value": "Grow sales / expand"},
+            {"label": "สร้างแบรนด์ให้เป็นที่รู้จักมากขึ้น", "value": "Build brand awareness"},
+            {"label": "รีเฟรชแบรนด์ทั้งระบบ", "value": "Full brand refresh"},
+            {"label": "เปิดตัวสินค้า / บริการใหม่", "value": "Launch a new product / service"},
+        ],
+        "insight": "เป้าหมายชัดแล้วครับ — ขั้นตอนถัดไปในแผนจะเรียงลำดับให้ตรงเป้านี้โดยเฉพาะ ไม่ใช่แผนกว้าง ๆ ที่ทำทุกอย่างพร้อมกัน",
+    },
+    {
+        "field": "horizon",
+        "question": "ดีครับ อยากเห็นผลภายในกรอบเวลาเท่าไหร่ครับ?",
+        "options": [
+            {"label": "6 เดือน", "value": "6 months"},
+            {"label": "3 เดือน — เร็วที่สุดเท่าที่ทำได้", "value": "3 months"},
+            {"label": "12 เดือน", "value": "12 months"},
+        ],
+        "insight": "กรอบเวลานี้กำหนดจังหวะของแผนได้ครับ — บางเป้าหมาย (เช่นรีแบรนด์ทั้งระบบ) ต้องใช้เวลามากกว่ากรอบสั้น ๆ ผมจะจัดลำดับให้เหมาะกัน",
+    },
+    {
+        "field": "budget",
+        "question": "รับทราบครับ งบที่คุณเตรียมไว้อยู่ประมาณช่วงไหนครับ?",
+        "options": [
+            {"label": "ต่ำกว่า 300,000 บาท", "value": "Under ฿300,000"},
+            {"label": "300,000 – 800,000 บาท", "value": "฿300,000 - 800,000"},
+            {"label": "800,000 – 1,200,000 บาท", "value": "฿800,000 - 1,200,000"},
+            {"label": "มากกว่า 1,200,000 บาท", "value": "฿1,200,000+"},
+            {"label": "ยังไม่แน่ใจ อยากให้ช่วยประเมิน", "value": "Not sure - needs guidance"},
+        ],
+        "insight": "งบช่วงนี้บอกได้ว่าแผนจะครอบคลุมได้กว้างแค่ไหนตาม rate card จริง — ทุกบรรทัดที่เสนอจะยึดตัวเลขนี้ ไม่มีการเดาราคา",
+    },
+    {
+        "field": "history",
+        "question": "ขอบคุณครับ คำถามสุดท้ายก่อนผมไปหาข้อมูล — เคยทำงานด้าน branding มาก่อนไหมครับ?",
+        "options": [
+            {"label": "เคยจ้างฟรีแลนซ์ทำโลโก้ครั้งเดียว", "value": "One freelance logo project"},
+            {"label": "ยังไม่เคยเลย", "value": "None"},
+            {"label": "มีทีม in-house ดูอยู่", "value": "In-house team"},
+            {"label": "เคยทำกับเอเจนซี่มาแล้ว", "value": "Worked with an agency before"},
+        ],
+        "insight": "ประวัติด้าน branding บอกว่าแผนควรเริ่มจากศูนย์หรือต่อยอดของเดิม — ครบ 8 ข้อแล้วครับ ต่อไปผมจะไปหาข้อมูลตลาดจริงให้",
+    },
+]
 
 
 def upgrade() -> None:
@@ -73,18 +177,13 @@ def upgrade() -> None:
 
     conn = op.get_bind()
 
-    # Import here, not at module load time — alembic imports every version
-    # file to build its graph, and INTAKE_SCRIPT should only be read at the
-    # moment this specific migration actually runs.
-    from app.services.client_intake import INTAKE_SCRIPT
-
     script_id = conn.execute(text("""
         INSERT INTO intake_scripts (version, locale, name, active)
         VALUES (1, 'th', 'Original 8-question script', true)
         RETURNING id
     """)).scalar_one()
 
-    for ordinal, step in enumerate(INTAKE_SCRIPT):
+    for ordinal, step in enumerate(_V1_SCRIPT):
         question_id = conn.execute(text("""
             INSERT INTO intake_questions (script_id, ordinal, field_key, prompt, insight)
             VALUES (:script_id, :ordinal, :field_key, :prompt, :insight)

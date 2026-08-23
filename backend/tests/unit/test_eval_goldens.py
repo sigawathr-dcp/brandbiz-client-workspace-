@@ -15,16 +15,16 @@ from app.eval.goldens import (
 )
 from app.services.client_intake import INTAKE_SCRIPT
 
+# Derived from the script rather than transcribed from it: this fixture went
+# stale the moment intake v2 renamed goal -> objective and horizon ->
+# timeframe, and a hand-written copy would go stale again on v3. First chip
+# of each question is an arbitrary but stable choice.
 _VALID_FIELDS = {
-    "industry": "Food & beverage / café",
-    "stage": "Growing, ready to expand",
-    "audience": "Urban working adults",
-    "challenge": "Low brand awareness",
-    "goal": "Grow sales / expand",
-    "horizon": "6 months",
-    "budget": "฿300,000 - 800,000",
-    "history": "One freelance logo project",
+    step["field"]: step["options"][0]["value"] for step in INTAKE_SCRIPT
 }
+_FIRST_INDUSTRY = _VALID_FIELDS["industry"]
+_FIRST_INDUSTRY_TH = INTAKE_SCRIPT[0]["options"][0]["label"]
+_LAST_FIELD = INTAKE_SCRIPT[-1]["field"]
 
 
 def _write_profiles(tmp_path, profiles: list[dict]):
@@ -39,7 +39,7 @@ class TestLoadProfilesCommittedFile:
 
     def test_committed_profiles_json_is_valid(self):
         profiles = load_profiles(DEFAULT_PROFILES_PATH)
-        assert len(profiles) == 14
+        assert len(profiles) == 18
 
     def test_committed_profiles_have_unique_ids(self):
         profiles = load_profiles(DEFAULT_PROFILES_PATH)
@@ -60,7 +60,7 @@ class TestLoadProfilesValidation:
         ])
         profiles = load_profiles(path)
         assert profiles[0].id == "X1"
-        assert profiles[0].fields["industry"] == "Food & beverage / café"
+        assert profiles[0].fields["industry"] == _FIRST_INDUSTRY
 
     def test_invalid_chip_value_raises(self, tmp_path):
         bad_fields = dict(_VALID_FIELDS, industry="Not a real chip value")
@@ -88,7 +88,7 @@ class TestLoadProfilesValidation:
 
     def test_missing_field_raises(self, tmp_path):
         fields = dict(_VALID_FIELDS)
-        del fields["history"]
+        del fields[_LAST_FIELD]
         path = _write_profiles(tmp_path, [
             {"id": "X1", "label_th": "", "note": "", "free_text_fields": [], "fields": fields}
         ])
@@ -119,7 +119,7 @@ class TestLoadProfilesValidation:
 
 class TestThaiChipLabel:
     def test_known_chip_value_reverse_maps(self):
-        assert thai_chip_label("industry", "Food & beverage / café") == "ร้านอาหาร / คาเฟ่"
+        assert thai_chip_label("industry", _FIRST_INDUSTRY) == _FIRST_INDUSTRY_TH
 
     def test_unknown_value_returns_none(self):
         assert thai_chip_label("industry", "ร้านขายของออนไลน์ทั่วไป") is None
@@ -142,7 +142,7 @@ class TestProfileThaiSummary:
         ])
         profile = load_profiles(path)[0]
         summary = profile_thai_summary(profile)
-        assert "ร้านอาหาร / คาเฟ่" in summary  # Thai label for the café chip value
+        assert _FIRST_INDUSTRY_TH in summary  # Thai label for the first industry chip
 
 
 class TestLoadLabels:

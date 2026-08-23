@@ -25,7 +25,7 @@ from collections.abc import Callable, Mapping
 
 from app.eval.goldens import THAI_FIELD_LABELS, thai_chip_label
 from app.services import case_match
-from app.services.client_intake import INTAKE_SCRIPT
+from app.services.client_intake import INTAKE_SCRIPT, match_query_fields
 
 QueryBuilder = Callable[[Mapping[str, str]], str]
 
@@ -34,13 +34,17 @@ def _script_fields() -> list[str]:
     return [step["field"] for step in INTAKE_SCRIPT]
 
 
+# Every variant below is an alternative CASE-MATCH query, so each one obeys
+# the same field eligibility rule as production
+# (client_intake.match_query_fields) — otherwise a variant could beat prod in
+# the eval report purely by embedding an answer prod is forbidden to use.
+
+
 def thai_labels(fields: Mapping[str, str]) -> str:
     """Thai field labels + Thai chip labels (falls back to the raw stored
     value for free-text fields, which are typically Thai prose already)."""
     parts = []
-    for f in _script_fields():
-        if f not in fields:
-            continue
+    for f in match_query_fields(fields):
         value = fields[f]
         display = thai_chip_label(f, value) or value
         parts.append(f"{THAI_FIELD_LABELS.get(f, f)}: {display}")
@@ -51,25 +55,52 @@ def values_only(fields: Mapping[str, str]) -> str:
     """No field labels at all — just the chip values / free text,
     semicolon-joined. Tests whether the "Business:", "Stage:", etc.
     labels in the production query help, hurt, or do nothing."""
-    return "; ".join(fields[f] for f in _script_fields() if f in fields)
+    return "; ".join(fields[f] for f in match_query_fields(fields))
+
+
+_TH_PHRASE: dict[str, str] = {
+    # v2
+    "industry": "ธุรกิจ{v}",
+    "stage": "อยู่ในระยะ{v}",
+    "audience": "กลุ่มลูกค้าหลักคือ{v}",
+    "challenge": "ปัญหาหลักคือ{v}",
+    "asset_channel": "ช่องทางที่มีอยู่คือ{v}",
+    "objective": "เป้าหมายคือ{v}",
+    "timeframe": "ภายใน{v}",
+    "budget": "งบประมาณ{v}",
+    # v1 only — an engagement pinned to script v1 still answers these
+    "goal": "เป้าหมายคือ{v}",
+    "horizon": "ภายใน{v}",
+    "history": "ประสบการณ์ด้าน branding: {v}",
+}
 
 
 def natural_th(fields: Mapping[str, str]) -> str:
     """One Thai sentence roughly as a consultant might phrase the brief,
     instead of a label:value list — the shape closest to the corpus's own
-    prose narrative."""
+    prose narrative.
+
+    Driven by INTAKE_SCRIPT order rather than a hand-written sentence, so
+    renaming or adding a question cannot silently drop a field from the
+    variant (v2 renamed goal -> objective and horizon -> timeframe, and
+    replaced history with asset_channel). Fields with no phrase template
+    fall back to "label: value" so a new question degrades to something
+    readable instead of vanishing.
+    """
 
     def val(f: str) -> str:
         v = fields.get(f, "")
         return thai_chip_label(f, v) or v
 
-    return (
-        f"ธุรกิจ{val('industry')} อยู่ในระยะ{val('stage')} "
-        f"กลุ่มลูกค้าหลักคือ{val('audience')} "
-        f"ปัญหาหลักคือ{val('challenge')} "
-        f"เป้าหมายคือ{val('goal')} ภายใน{val('horizon')} "
-        f"งบประมาณ{val('budget')} ประสบการณ์ด้าน branding: {val('history')}"
-    )
+    parts: list[str] = []
+    for f in match_query_fields(fields):
+        template = _TH_PHRASE.get(f)
+        if template is None:
+            label = THAI_FIELD_LABELS.get(f, f)
+            parts.append(f"{label}: {val(f)}")
+        else:
+            parts.append(template.format(v=val(f)))
+    return " ".join(parts)
 
 
 VARIANTS: dict[str, QueryBuilder] = {
