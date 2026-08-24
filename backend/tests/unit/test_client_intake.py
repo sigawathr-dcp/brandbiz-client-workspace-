@@ -133,6 +133,15 @@ class TestFieldManifest:
             assert [o["label"] for o in f["options"]] == [o["label"] for o in step["options"]]
             assert [o["index"] for o in f["options"]] == list(range(len(step["options"])))
 
+    def test_options_carry_the_stored_value(self):
+        # Edit mode marks which chip is the current answer by comparing this
+        # to the stored profile value — the labels are Thai and the stored
+        # values English, so `label` can never make that match.
+        for f, step in zip(field_manifest(), INTAKE_SCRIPT):
+            assert [o["value"] for o in f["options"]] == [o["value"] for o in step["options"]]
+            for o in f["options"]:
+                assert o["value"] == resolve_answer(step, option_index=o["index"], free_text=None)
+
 
 class TestIndexOfField:
     def test_round_trips_every_field(self):

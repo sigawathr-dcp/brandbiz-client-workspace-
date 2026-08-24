@@ -233,6 +233,13 @@ async def _resolve_answer_value(
 class ChipOut(BaseModel):
     index: int
     label: str
+    # What resolve_answer() stores for this chip — i.e. the exact string that
+    # ends up in `fields`. Only populated on the Profile tab's field manifest
+    # (intake_fields), where edit mode needs it to mark which chip is the
+    # current answer; the labels are Thai and the stored values English, so
+    # matching on `label` can never find it. Stays None for `current_step`,
+    # which is asking the question, not replaying an answer.
+    value: str | None = None
 
 
 class CurrentStepOut(BaseModel):

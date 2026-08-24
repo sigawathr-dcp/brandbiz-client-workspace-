@@ -408,13 +408,21 @@ def field_manifest() -> list[dict]:
     contract for the frontend Profile tab (WorkPanel.tsx), served on GET
     /client/bootstrap so adding/renaming a step here can never desync the
     frontend's field list or its completeness math. `options` (each
-    {index, label}) lets the Profile tab's edit mode render the same chips
-    the intake used, rather than keeping its own copy of the script."""
+    {index, label, value}) lets the Profile tab's edit mode render the same
+    chips the intake used, rather than keeping its own copy of the script.
+
+    `value` is what resolve_answer() would store for that chip — the same
+    string the profile holds — so edit mode can mark which chip is the
+    CURRENT answer. Matching on `label` cannot do that: labels are Thai and
+    stored values are English."""
     return [
         {
             "key": step["field"],
             "label": FIELD_LABELS.get(step["field"], step["field"]),
-            "options": [{"index": i, "label": o["label"]} for i, o in enumerate(step["options"])],
+            "options": [
+                {"index": i, "label": o["label"], "value": o["value"]}
+                for i, o in enumerate(step["options"])
+            ],
         }
         for step in INTAKE_SCRIPT
     ]
@@ -467,7 +475,10 @@ async def field_manifest_db(session: AsyncSession, script_id: uuid.UUID) -> list
         out.append({
             "key": q.field_key,
             "label": FIELD_LABELS.get(q.field_key, q.field_key),
-            "options": [{"index": i, "label": o.label} for i, o in enumerate(options)],
+            "options": [
+                {"index": i, "label": o.label, "value": o.value}
+                for i, o in enumerate(options)
+            ],
         })
     return out
 

@@ -3,6 +3,11 @@
 export interface Chip {
   index: number
   label: string
+  // The value the server stores when this chip is picked. Sent only on
+  // IntakeField.options (GET /client/bootstrap -> intake_fields), where the
+  // Profile tab's edit mode uses it to mark the current answer — `label` is
+  // Thai and the stored value English, so they never compare equal.
+  value?: string
 }
 
 export interface CurrentStep {
