@@ -2508,3 +2508,128 @@ Mid-session, `git stash`/`git stash pop` collided with a concurrent session (see
 - [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs. ORM autogenerate
 - [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for an unresolvable `research_run`/`case_match`
 - [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+
+## 2026-08-24 14:39 — case-study-corpus-refresh @ 3c1771b
+
+**Summary:** Replaced the single-use `/try/<token>` invite link with LINE Login as the client
+entry point (new decision **D24**, PLAN.md Task 5.13). "One client, one run" moves from the
+*link* to the *identity*: `users.line_user_id` carries the verified `sub` from a LIFF
+`id_token` under a partial UNIQUE index, a returning LINE user resumes the SAME seat, and the
+single-run rule is enforced one level up at `POST /client/engagements`. Each LINE identity is
+auto-provisioned its own workspace, so the pooled `token_budget_limit` is per person. The
+invite path (`/public/redeem`, `client_invites`) is deliberately kept as break-glass.
+
+**Files changed:**
+- `backend/alembic/versions/0063_line_login.py` — new; `users.line_user_id VARCHAR(64)`, partial
+  `uq_users_line_user_id` (UNIQUE WHERE NOT NULL, so staff and invite-era seats stay
+  unconstrained), and `audit_action` gains `client_line_login`
+- `backend/app/models/user.py` — `line_user_id` column + the same partial unique index declared in
+  `__table_args__`. Required, not redundant: `tests/integration/conftest.py` builds schema from
+  `Base.metadata.create_all`, not from migrations, so a migration-only index is invisible to the
+  harness and the invariant would go untested
+- `backend/app/models/audit.py` — `client_line_login` added to the ORM label list
+- `backend/app/services/line_auth.py` — new; verifies the `id_token` against LINE's
+  `/oauth2/v2.1/verify` (LINE signs HS256 or ES256 depending on channel config; delegating means
+  never tracking that or its key rotation). `sub` is the only field treated as identity;
+  `name`/`picture` are user-controlled display data. Distinguishes 401 (their token) from 502
+  (LINE unreachable) and never echoes LINE's `error_description`, which would be a probe oracle
+- `backend/app/services/workspace.py` — `provision_line_seat` / `_refresh_line_seat` /
+  `_create_line_seat` / `get_seat_by_line_user_id` / `_line_workspace_slug`. Idempotent by design
+  — the exact opposite of `redeem_invite`, which must not be — and adopts the winner on
+  `IntegrityError` when two logins race. Refuses a deactivated seat (403)
+- `backend/app/services/engagement.py` — `start_new` now 409s when the seat already has any
+  engagement, behind `settings.client_single_engagement`
+- `backend/app/routers/client_public.py` — `POST /public/line/login`; loose per-IP limit (D23's
+  shared-NAT reasoning) plus a real per-`sub` limit applied only after LINE has verified the token
+- `backend/app/config.py` — `line_login_channel_id/secret`, `line_liff_id`, `line_verify_url`,
+  `client_single_engagement`
+- `frontend-chat/app/try/page.tsx`, `components/client/LineLogin.tsx` — new; LIFF entry. LIFF ID
+  read server-side and passed as a prop (`NEXT_PUBLIC_*` is inlined at build time and would not
+  reach the browser from a compose `environment:` block)
+- `frontend-chat/app/api/public/line/login/route.ts` — new; BFF proxy, same shape as `redeem`
+- `frontend-chat/middleware.ts` — `pathname === '/try'` arm; `startsWith('/try/')` does not match
+  the bare path, so the new page would have bounced to `/login`
+- `backend/tests/unit/test_line_auth.py` — new; 8 tests, all passing
+- `backend/tests/integration/test_line_login.py` — new; 8 tests (not yet executed, see below)
+- `backend/tests/integration/conftest.py` — hand-rolled `audit_action` enum gains the new label,
+  or `test_audit_enum_sync` fails
+- `backend/tests/integration/test_engagement_funnel.py` — the second-engagement assertion now
+  turns `client_single_engagement` off explicitly; the multi-brief path still exists behind the flag
+- `PLAN.md` — decision **D24**; task **5.13**
+- `.env.example`, `docker-compose.yml` — `LINE_LOGIN_CHANNEL_ID/SECRET`, `LINE_LIFF_ID`,
+  `CLIENT_SINGLE_ENGAGEMENT` wired to both services (the containers have no `.env` file)
+
+**Verification:** unit suite **1016 passed / 13 failed**; the 13 are byte-identical to the
+pre-change baseline, verified by `git stash`-ing the whole change set and re-running (1008 passed
+/ same 13 — the usual `ENCRYPTION_KEY`/SDK host gaps). Frontend `tsc --noEmit` clean. App imports
+clean and all three `/public/*` routes register.
+
+**Not verified:** the 8 new integration tests and the amended funnel test — Docker is unavailable
+on this host, so the pytest-docker Postgres harness cannot start. They collect cleanly (15 tests)
+but have never executed, which means the UNIQUE-index race behaviour, the 403/409 paths and the
+consent assertions are all unproven against a real database. Migration `0063` has never been run.
+No LINE channel exists yet, so `/public/line/login` returns 503 and nothing has been exercised end
+to end; LIFF additionally requires public HTTPS, so this cannot be tested against `localhost:3100`
+at all.
+
+**Divergences from `line_plan.md`** (untracked pre-existing design doc, found only after
+implementing — worth reconciling before this is committed): it specifies one **shared** workspace
+resolved by slug, I auto-provision one per LINE user (per the user's answer this session, and the
+doc itself flags the shared-workspace blast radius); it recommends keeping
+`consent_acknowledged_at` auto-set, I require an explicit tick and 403 without it; it specifies the
+`@line/liff` **npm package** over the CDN script (for type-checking and `output: 'standalone'`), I
+used the CDN script; and it names things differently throughout — `/line` vs my `/try`,
+`POST /public/line-login` vs `/public/line/login`, `line_identity.py` vs `line_auth.py`,
+`line_login` vs `client_line_login`, migration `0059` (stale — 0059-0062 are taken) vs `0063`. It
+also specifies a deterministic synthetic `google_email` derived from the sub; I used a random
+uuid4, relying on the unique index rather than determinism for retry-safety.
+
+**Next steps:**
+- [ ] New: reconcile with `line_plan.md` before committing — decide shared vs per-user workspace,
+      auto-consent vs explicit tick, CDN vs `@line/liff`, and the route/service naming
+- [ ] New: run the integration suite on a host with Docker — 8 new tests plus the amended funnel
+      test have never executed
+- [ ] New: run `alembic upgrade head` (0063) against a real database; it has only been read, never applied
+- [ ] New: create the LINE Login / MINI App channel + LIFF app and set `LINE_LOGIN_CHANNEL_ID`,
+      `LINE_LOGIN_CHANNEL_SECRET`, `LINE_LIFF_ID`; put the Login channel under the SAME provider as
+      any future Messaging API channel or the user ids will never reconcile
+- [ ] New: LIFF needs public HTTPS — stand up a tunnel to port 3100 for dev, and decide whether prod
+      is a dedicated host (`line_plan.md` Phase A)
+- [ ] New: `line_plan.md` Phase D (mobile/LIFF UI polish), Phase E (cookies/streaming/deploy) and
+      B6 (session-expiry recovery instead of dead-ending at `/login`) are entirely unbuilt
+- [ ] New: decide what happens to the admin `/clients` invite UI now that invites are break-glass only
+- [ ] New: `line_plan.md` and `data_storage_plan.md` are both untracked at repo root — decide whether
+      to commit or delete
+- [ ] Carried: `RedeemInvite.tsx`'s hardcoded "น้องภูมิ" loading copy — now duplicated in `LineLogin.tsx`
+- [ ] Carried: tag the five judgement dimensions — `scripts/tag_case_studies.py --narrative`, then
+      `--coverage` and `seed_case_tags.py --apply`
+- [ ] Carried: confirm the Q4-Challenge / Q6-Objective overlap is wanted
+- [ ] Carried: review the two low-confidence (0.60) secondary industry tags; decide GrabMart's
+- [ ] Carried: sweep `case_match_tag_weight` in the eval harness once labels exist
+- [ ] Carried: browser click-through of the v2 interview end to end
+- [ ] Carried: rebuild + one live chat turn against a seat with a saved plan
+- [ ] Carried: decide whether `/w/plans/[id]` gets its own chat box
+- [ ] Carried: chat context covers the plan only — intake, market scan and matched cases are still
+      invisible outside the 20-message window
+- [ ] Carried: browser click-through of the Profile tab's failure path — needs a real login session
+- [ ] Carried: the case-match embed host is unreachable — reconnect to `192.168.20.0/24` or its VPN
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key in the working tree; verify it's
+      gitignored and consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: `docs/gap-closure.md`'s G-I1 Thai/English switch is still not built
+- [ ] Carried: `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead
+      `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs ORM autogenerate
+- [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for
+      an unresolvable `research_run`/`case_match`
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card;
+      prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading
+      confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)

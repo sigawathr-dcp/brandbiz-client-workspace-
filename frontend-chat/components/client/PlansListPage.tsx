@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { money } from './budgetTable'
 import type { SavedPlan } from './types'
 
 // Client Workspaces (Phase 5, D21/D22) — "My plans" list. Each plan is a
@@ -103,7 +104,7 @@ export default function PlansListPage() {
                 <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>{p.core_idea}</div>
                 {p.budget && (
                   <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>
-                    {p.budget.currency} {p.budget.total}
+                    {p.budget.currency} {money(p.budget.total)}
                   </div>
                 )}
               </a>

@@ -20,6 +20,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.conversation import Conversation
 from app.models.engagement import STEP_KEYS, Engagement, EngagementStep
 from app.models.intake import IntakeScript
@@ -91,7 +92,35 @@ async def get_or_create_active(session: AsyncSession, user: User, workspace_id: 
 async def start_new(session: AsyncSession, user: User, workspace_id: uuid.UUID) -> Engagement:
     """A returning client starting a fresh brief (POST /client/engagements).
     The old schema's uq_client_profiles_workspace_user made this
-    impossible — a seat got exactly one intake forever."""
+    impossible — a seat got exactly one intake forever.
+
+    Since 0063 (LINE Login) this is where "one client, one run" is actually
+    enforced. The entry point no longer enforces it: a LINE seat is
+    idempotent on purpose, so a client who closes the LIFF webview can log
+    back in and find their plan instead of being locked out the way a spent
+    invite link left them. The cost of that is that the funnel itself has to
+    say no to a SECOND brief — which is this check. Flip
+    settings.client_single_engagement to restore unlimited briefs (seq 2,
+    3, ...); the schema has always supported them.
+    """
+    if settings.client_single_engagement:
+        prior_any = (
+            await session.execute(
+                select(Engagement.id)
+                .where(Engagement.workspace_id == workspace_id, Engagement.user_id == user.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if prior_any is not None:
+            # 409, not 403: the request conflicts with state that already
+            # exists rather than being forbidden outright, and the client
+            # already has somewhere to go — GET /client/bootstrap returns
+            # the engagement they are being pointed back at.
+            raise HTTPException(
+                status_code=409,
+                detail="You have already started a brief. Continue with your existing one.",
+            )
+
     current = await session.execute(
         select(Engagement).where(
             Engagement.workspace_id == workspace_id,

@@ -380,7 +380,14 @@ async def test_bootstrap_replays_the_saved_plan_card(db_session: AsyncSession):
         # A fresh brief starts with an empty thread — the earlier engagement's
         # plan stays on /w/plans (still in `plans`) but must not be replayed
         # into this one, not even once it is the active plan again.
-        with patch.object(engagement_svc.audit_svc, "log", new=AsyncMock()):
+        #
+        # client_single_engagement is off here on purpose: since 0063 (LINE
+        # Login) the default caps a client at one brief, because a LINE seat
+        # is reusable and the cap moved from the entry point to the funnel.
+        # The multi-brief path this asserts is still supported behind the
+        # flag, and is what any non-LINE seat gets.
+        with patch.object(engagement_svc.settings, "client_single_engagement", False), \
+                patch.object(engagement_svc.audit_svc, "log", new=AsyncMock()):
             second = await engagement_svc.start_new(db_session, user, ws.id)
         second.active_plan_id = plan.id
         await db_session.commit()

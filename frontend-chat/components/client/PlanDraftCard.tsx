@@ -1,6 +1,7 @@
 'use client'
 
 import type { DraftPlan, PlanDiff } from './types'
+import { money, moneyCol } from './budgetTable'
 
 // Client Workspaces (Phase 5, D21/D22) — the 4-part draft plan card, inline
 // in the transcript. Every budget row's amount is computed server-side from
@@ -11,6 +12,7 @@ export default function PlanDraftCard({
   status,
   plan,
   error,
+  setupError,
   showDetail,
   saved,
   savedPlanId,
@@ -24,6 +26,9 @@ export default function PlanDraftCard({
   status: 'pending' | 'done' | 'error'
   plan?: DraftPlan
   error?: string
+  // True iff the draft failed with HTTP 503 (workspace setup incomplete)
+  // rather than a transient provider error — changes the copy below.
+  setupError?: boolean
   showDetail?: boolean
   saved?: boolean
   savedPlanId?: string
@@ -57,7 +62,17 @@ export default function PlanDraftCard({
   if (status === 'error' || !plan) {
     return (
       <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--ink-3)' }}>
-        {agentName} couldn&apos;t draft a plan just now — try again in a moment.
+        {setupError ? (
+          // HTTP 503 — this workspace is missing its agent or its rate card.
+          // No amount of retrying fixes that, and the old copy ("try again in
+          // a moment") sent clients round the loop instead of to a human.
+          <>
+            {agentName} can&apos;t draft a plan for this workspace yet — it&apos;s still
+            being set up. Please contact Brandbiz; retrying won&apos;t help.
+          </>
+        ) : (
+          <>{agentName} couldn&apos;t draft a plan just now — try again in a moment.</>
+        )}
         {showDetail && error && (
           <div style={{ marginTop: 4, fontSize: 11.5, fontFamily: 'monospace' }}>Reason: {error}</div>
         )}
@@ -121,7 +136,7 @@ export default function PlanDraftCard({
             <thead>
               <tr>
                 <th style={{ textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: 'var(--ink-3)', padding: '0 0 7px' }}>Line item</th>
-                <th style={{ textAlign: 'right', fontSize: 10.5, fontWeight: 600, color: 'var(--ink-3)', padding: '0 0 7px 12px' }}>
+                <th style={{ ...moneyCol, textAlign: 'right', fontSize: 10.5, fontWeight: 600, color: 'var(--ink-3)', padding: '0 0 7px 12px' }}>
                   {budget.currency}
                 </th>
               </tr>
@@ -130,21 +145,21 @@ export default function PlanDraftCard({
               {budget.lines.map((l) => (
                 <tr key={l.code}>
                   <td style={{ padding: '7px 0', borderTop: '1px solid var(--line-2)', color: 'var(--ink-2)' }}>{l.label}</td>
-                  <td style={{ padding: '7px 0 7px 12px', borderTop: '1px solid var(--line-2)', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
-                    {l.amount}
+                  <td style={{ ...moneyCol, padding: '7px 0 7px 12px', borderTop: '1px solid var(--line-2)', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                    {money(l.amount)}
                   </td>
                 </tr>
               ))}
               <tr>
                 <td style={{ padding: '7px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-3)' }}>Contingency</td>
-                <td style={{ padding: '7px 0 7px 12px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--ink-3)' }}>
-                  {budget.contingency}
+                <td style={{ ...moneyCol, padding: '7px 0 7px 12px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--ink-3)' }}>
+                  {money(budget.contingency)}
                 </td>
               </tr>
               <tr>
                 <td style={{ padding: '9px 0 0', borderTop: '2px solid var(--ink)', fontWeight: 600 }}>Estimate</td>
-                <td style={{ padding: '9px 0 0 12px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                  {budget.total}
+                <td style={{ ...moneyCol, padding: '9px 0 0 12px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                  {money(budget.total)}
                 </td>
               </tr>
             </tbody>
@@ -310,13 +325,13 @@ function PlanChangeSummary({ diff, currency }: { diff: PlanDiff; currency: strin
       {added.map((l) => (
         <div key={`a-${l.code}`} style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
           + {l.label ?? l.code}
-          {l.amount ? ` · ${l.amount} ${currency}` : ' · needs an expert quote'}
+          {l.amount ? ` · ${money(l.amount)} ${currency}` : ' · needs an expert quote'}
         </div>
       ))}
       {removed.map((l) => (
         <div key={`r-${l.code}`} style={{ fontSize: 12.5, color: 'var(--ink-3)', textDecoration: 'line-through' }}>
           {l.label ?? l.code}
-          {l.amount ? ` · ${l.amount} ${currency}` : ''}
+          {l.amount ? ` · ${money(l.amount)} ${currency}` : ''}
         </div>
       ))}
       {qtyChanged.map((l) => (
@@ -326,7 +341,7 @@ function PlanChangeSummary({ diff, currency }: { diff: PlanDiff; currency: strin
       ))}
       {budgetMoved && before !== after && (
         <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
-          Estimate {before ?? '—'} → {after ?? '—'} {currency}
+          Estimate {before ? money(before) : '—'} → {after ? money(after) : '—'} {currency}
         </div>
       )}
     </div>

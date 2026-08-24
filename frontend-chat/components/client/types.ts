@@ -277,6 +277,11 @@ export interface Turn {
   planStatus?: 'pending' | 'done' | 'error'
   plan?: DraftPlan
   planError?: string
+  // Set when the draft failed with HTTP 503 — the workspace is missing a
+  // piece of setup (no assigned agent, no rate card) rather than having hit
+  // a transient provider failure. Retrying cannot clear it, so the card
+  // drops "try again in a moment".
+  planSetupError?: boolean
   planSaved?: boolean
   savedPlanId?: string
   // Set when a save/revise attempt on this card's plan failed — surfaced

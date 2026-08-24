@@ -404,9 +404,17 @@ export default function ClientWorkspace() {
     if (planDrafted && !force) return
     setPlanDrafted(true)
     const planTurnId = appendTurn({ who: 'ai', kind: 'plan', text: '', planStatus: 'pending' })
+    // 503 from POST /client/plan/draft means the workspace is missing setup
+    // — no agent assigned, or no active rate card. Neither clears by waiting,
+    // so the card must not tell the client to try again in a moment; doing so
+    // is what produced the retry loops in the backend log.
+    let setupError = false
     try {
       const res = await fetch('/api/client/plan/draft', { method: 'POST', credentials: 'include' })
-      if (!res.ok) throw new Error(await errorDetail(res, 'Could not draft a plan'))
+      if (!res.ok) {
+        setupError = res.status === 503
+        throw new Error(await errorDetail(res, 'Could not draft a plan'))
+      }
       const data: DraftPlan = await res.json()
       setTurns((prev) => prev.map((t) => (t.id === planTurnId ? { ...t, planStatus: 'done', plan: data } : t)))
       appendTurn({
@@ -422,7 +430,11 @@ export default function ClientWorkspace() {
       console.error('[plan/draft]', err)
       const message = err instanceof Error ? err.message : String(err)
       setTurns((prev) =>
-        prev.map((t) => (t.id === planTurnId ? { ...t, planStatus: 'error', planError: message } : t))
+        prev.map((t) =>
+          t.id === planTurnId
+            ? { ...t, planStatus: 'error', planError: message, planSetupError: setupError }
+            : t
+        )
       )
       setPlanDrafted(false)
     }
@@ -1247,6 +1259,7 @@ export default function ClientWorkspace() {
                       status={t.planStatus ?? 'pending'}
                       plan={t.plan}
                       error={t.planError}
+                      setupError={t.planSetupError}
                       showDetail={isPreview}
                       saved={t.planSaved}
                       savedPlanId={t.savedPlanId}

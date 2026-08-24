@@ -61,6 +61,10 @@ _audit_action_pg = PgEnum(
     # engagement (POST /client/engagements), distinct from the original
     # client_redeemed (invite -> first seat) event.
     "engagement_started",
+    # LINE Login as the client entry point (0063) — a LINE identity bound to
+    # a seat. Re-emitted on every returning login, so repeat visits are
+    # visible in the trail; client_redeemed stays for the invite path.
+    "client_line_login",
     name="audit_action",
     create_type=False,
 )

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ENUM as PgEnum, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,19 @@ _role_level_pg = PgEnum(
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # "One seat per LINE identity" (migration 0063), as a database
+        # invariant rather than an application check — a read-then-write in
+        # provision_line_seat can be raced by a double-tapped login button;
+        # this cannot. Partial so the many NULLs (internal staff, and every
+        # seat from the older invite-redemption path) stay unconstrained.
+        Index(
+            "uq_users_line_user_id",
+            "line_user_id",
+            unique=True,
+            postgresql_where=text("line_user_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -36,6 +49,11 @@ class User(Base):
         nullable=True,
         index=True,
     )
+    # Verified `sub` from a LINE Login id_token (0063). UNIQUE where NOT
+    # NULL — this is what makes "one seat per LINE user" a database
+    # invariant instead of an application check. NULL for internal staff and
+    # for seats created by the older invite-redemption path.
+    line_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consent_acknowledged_at: Mapped[datetime | None] = mapped_column(

@@ -122,6 +122,39 @@ class Settings(BaseSettings):
     client_default_monthly_token_limit: int = 200_000
     client_default_workspace_budget: int = 2_000_000
 
+    # LINE Login (0063) — replaces single-use /try/<token> invite links as
+    # the client entry point. Blank channel id disables POST
+    # /public/line/login entirely (503), leaving /public/redeem as the only
+    # way in; that is the intended state until the LINE channel exists.
+    #
+    # The id_token is verified against LINE's own endpoint rather than
+    # locally: LINE signs with the channel secret (HS256) for some flows and
+    # ES256 for others, and delegating means we never track that, or the key
+    # rotation behind it. channel_id is sent as the expected audience.
+    line_login_channel_id: str = ""
+    line_login_channel_secret: str = ""
+    # Surfaced to the browser so the LIFF page can init without a round
+    # trip; a LIFF id is public by design (it appears in the liff.line.me
+    # URL), unlike the channel secret.
+    line_liff_id: str = ""
+    line_verify_url: str = "https://api.line.me/oauth2/v2.1/verify"
+    # A LINE seat gets exactly one run through the funnel: a returning login
+    # resumes the existing seat and its finished plan, but POST
+    # /client/engagements refuses to open a second brief. Set false to
+    # restore the pre-0063 behavior (engagement.py::start_new, seq 2, 3, ...).
+    client_single_engagement: bool = True
+
+    # The Agent row cloned into every self-serve workspace as its น้องภูมิ
+    # persona. agents.workspace_id is single-valued, so a workspace cannot
+    # share another's agent — workspace_svc.assign_agent() *moves* the row.
+    # The invite flow papered over this with a manual admin assignment after
+    # POST /admin/clients; a LINE login has no admin in the loop, so the
+    # workspace would come up agent-less and plan drafting 503s
+    # (services/plan.py::draft_plan). Blank = no cloning: the workspace is
+    # created anyway and an admin assigns an agent by hand, the pre-0063
+    # behavior.
+    client_template_agent_id: str = ""
+
     # Cookie settings
     cookie_domain: str = ""
     cookie_secure: bool = False

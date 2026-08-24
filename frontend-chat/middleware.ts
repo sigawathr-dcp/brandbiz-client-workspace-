@@ -5,11 +5,13 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get('access_token')?.value
   const { pathname } = request.nextUrl
 
-  // Client Workspaces (Phase 5, D21/D22): /try/<token> redeems an invite
-  // into a fresh session, so it must be reachable with no cookie at all —
-  // same reasoning as /login. /p/<token> (Phase 6) is a public read-only
-  // plan share link. Neither goes through the token-required gate below.
-  if (pathname.startsWith('/try/') || pathname.startsWith('/p/')) {
+  // Client Workspaces (Phase 5, D21/D22): the client entry points must be
+  // reachable with no cookie at all — same reasoning as /login. /try is the
+  // LINE Login page (migration 0063) and /try/<token> the invite-redemption
+  // fallback; the bare /try needs its own arm because startsWith('/try/')
+  // does not match it. /p/<token> (Phase 6) is a public read-only plan
+  // share link. None of these go through the token-required gate below.
+  if (pathname === '/try' || pathname.startsWith('/try/') || pathname.startsWith('/p/')) {
     return NextResponse.next()
   }
 

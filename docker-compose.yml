@@ -58,6 +58,20 @@ services:
       # D23 — let client-workspace seats use the full internal app. Off by
       # default; see .env.example for details.
       CLIENT_INTERNAL_ACCESS_ENABLED: ${CLIENT_INTERNAL_ACCESS_ENABLED:-false}
+      # LINE Login (0063) — the client entry point. Blank channel id leaves
+      # POST /public/line/login disabled (503) and /public/redeem as the way
+      # in. Wired explicitly for the same reason as the flags above: the
+      # container has no .env file.
+      LINE_LOGIN_CHANNEL_ID: ${LINE_LOGIN_CHANNEL_ID:-}
+      LINE_LOGIN_CHANNEL_SECRET: ${LINE_LOGIN_CHANNEL_SECRET:-}
+      LINE_LIFF_ID: ${LINE_LIFF_ID:-}
+      # One run through the funnel per LINE identity — enforced at POST
+      # /client/engagements, not at the door.
+      CLIENT_SINGLE_ENGAGEMENT: ${CLIENT_SINGLE_ENGAGEMENT:-true}
+      # The published Agent cloned into each self-serve LINE workspace as
+      # its น้องภูมิ persona. Blank leaves those workspaces agent-less, which
+      # 503s POST /client/plan/draft — see .env.example.
+      CLIENT_TEMPLATE_AGENT_ID: ${CLIENT_TEMPLATE_AGENT_ID:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -171,6 +185,9 @@ services:
       NEXT_PUBLIC_API_URL: http://localhost:8100
       BACKEND_URL: http://backend-api:8000
       NODE_ENV: development
+      # Read at request time by app/try/page.tsx, not baked in at build —
+      # the same image can point at a different LINE channel.
+      LINE_LIFF_ID: ${LINE_LIFF_ID:-}
     networks: [internal]
     depends_on:
       backend-api:

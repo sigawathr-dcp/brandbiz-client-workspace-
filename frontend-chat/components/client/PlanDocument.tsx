@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import LeadModal from './LeadModal'
 import PlanRating from './PlanRating'
 import PlanSideRail from './PlanSideRail'
+import { money, moneyCol } from './budgetTable'
 import type { PlanVersionBody, SavedPlan } from './types'
 
 // Client Workspaces (Phase 5, D21/D22) — the plan document view: 720px
@@ -199,21 +200,21 @@ export default function PlanDocument({ planId }: { planId: string }) {
                     {budget.lines.map((l) => (
                       <tr key={l.code}>
                         <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-2)' }}>{l.label}</td>
-                        <td style={{ padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-                          {l.amount}
+                        <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+                          {money(l.amount)}
                         </td>
                       </tr>
                     ))}
                     <tr>
                       <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-3)' }}>Contingency</td>
-                      <td style={{ padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--ink-3)' }}>
-                        {budget.contingency}
+                      <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--ink-3)' }}>
+                        {money(budget.contingency)}
                       </td>
                     </tr>
                     <tr>
                       <td style={{ padding: '12px 0 0', borderTop: '2px solid var(--ink)', fontWeight: 600, fontSize: 15 }}>Estimate</td>
-                      <td style={{ padding: '12px 0 0 14px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15 }}>
-                        {budget.currency} {budget.total}
+                      <td style={{ ...moneyCol, padding: '12px 0 0 14px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15 }}>
+                        {budget.currency} {money(budget.total)}
                       </td>
                     </tr>
                   </tbody>

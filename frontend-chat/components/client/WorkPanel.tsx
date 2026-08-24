@@ -209,19 +209,28 @@ export default function WorkPanel({
                       </div>
                     </div>
                     {editMode && answered && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingLeft: 25 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 6, paddingLeft: 25 }}>
                         {f.options.map((o) => (
                           <button
                             key={o.index}
                             onClick={() => pickChip(f.key, o.index, o.label)}
                             style={{
-                              height: 24,
-                              padding: '0 9px',
-                              borderRadius: 99,
+                              // A long option (Thai copy runs long) has to wrap
+                              // inside the pill, not spill past it — so this is
+                              // minHeight + vertical padding, never a fixed
+                              // height.
+                              minHeight: 24,
+                              maxWidth: '100%',
+                              padding: '3px 9px',
+                              borderRadius: 12,
                               border: edit?.option_index === o.index ? '1px solid var(--accent)' : '1px solid var(--line-2)',
                               background: edit?.option_index === o.index ? 'var(--accent-weak)' : 'var(--surface)',
                               color: edit?.option_index === o.index ? 'var(--accent)' : 'var(--ink-2)',
                               fontSize: 11,
+                              lineHeight: 1.45,
+                              textAlign: 'left',
+                              whiteSpace: 'normal',
+                              overflowWrap: 'anywhere',
                               cursor: 'pointer',
                             }}
                           >
