@@ -2702,3 +2702,74 @@ partial indexes in place. Not committed.
 - [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` columns; 3 index-naming mismatches
 - [ ] Carried: `0051`/`0054`/`0055`/`0057` backfills lack defensive checks for unresolvable rows
 - [ ] Carried: long-tail backlog (ground-truth labels; placeholder rate card; prompt-injection pass; secrets rotation; `COOKIE_SECURE`+TLS; server-spec.md deck headings; `production_improvement.md` #18–25; remaining G-tasks)
+
+## 2026-08-25 01:21 — fix/case-library-scope @ 508697c
+
+**Summary:** Diagnosed "No case studies matched closely enough to show" — not the 0.15 score floor
+but tenant isolation: the 21 case files were `scope="org"` stamped to `brandbiz-demo`, and every
+LINE-minted workspace (D24) is its own tenant, so `rag_search._scope_filter` hid the whole corpus
+and every production `case_match_runs` row had `match_count=0` (replayed two real runs: 0 chunks
+retrieved). Fixed with a new seed-only `files.scope="library"` (ADR 0002) — a stand-alone R4
+disjunct readable by every tenant, independent of `CLIENT_INTERNAL_ACCESS_ENABLED` (which
+`line_plan.md` Risks #2 says must stay off) — plus migration `0065` moving the existing corpus,
+a `library_available` flag on `POST /client/cases` and a distinct Cases-tab message for the
+setup-fault case. Replaying the same two runs now yields 3 matches each (0.39–0.67); DB verified
+at head `0065`, containers rebuilt, 14 touched-area unit tests pass, `tsc --noEmit` clean.
+Committed on `fix/case-library-scope` (not pushed).
+
+**Files changed:**
+- `backend/app/models/file.py` — `VALID_SCOPES` gains `"library"`, `LIBRARY_SCOPE` constant
+- `backend/app/tools/rag_search.py` — `_scope_filter` adds the un-gated library disjunct
+- `backend/app/routers/files.py` — list + single-read admit library files; `POST /files` rejects the scope
+- `backend/app/services/agent.py` — `attach_file` accessibility check admits library files
+- `backend/app/routers/client.py` — lazy `CaseStudy` rows get `workspace_id=None`; `_cases_out(library_available=…)`; zero-chunk warning log; replay reports `True`/`None`
+- `backend/alembic/versions/0065_case_library_scope.py` — new: data migration, `case-study_*` files + catalog rows → library/NULL
+- `backend/scripts/seed_case_studies.py` — writes library scope; workspace arg only picks the agent
+- `backend/tests/unit/test_rag_search.py` — `TestLibraryScope` (3 tests)
+- `backend/tests/integration/test_client_isolation.py` — `TestCaseLibraryScope` under both flag states
+- `docs/adr/0002-shared-case-library-scope.md` — new ADR: decision + rejected alternatives
+- `frontend-chat/components/client/types.ts` — `CasesResult.library_available`
+- `frontend-chat/components/client/CaseMatchCards.tsx` — "The case library isn't available for this workspace yet" state
+- `docker-compose.yml` — NOT mine, uncommitted: host port `5433:5432` on postgres appeared during the session
+
+**Next steps:**
+- [ ] New: browser click-through of a LINE seat running Cases after the fix (probe was pipeline-level, not UI)
+- [ ] New: `pytest-docker` harness fails on the clean tree (inttest Postgres container never becomes healthy) — `TestCaseLibraryScope` has never executed; fix harness, then run
+- [ ] New: 15 pre-existing unit failures unrelated to this change (`test_audit`, `test_consent`, `test_crypto`, `test_google_llm`, `test_vault_connection`) — env/key dependent; triage
+- [ ] New: decide whether to commit the `docker-compose.yml` `5433` port mapping
+- [ ] New: 16 `retired-*` catalog rows remain org-scoped to demo (deliberately untouched by 0065); prune or leave
+- [ ] New: merge `fix/case-library-scope` → main
+- [ ] Carried: browser click-through of a multi-select interview (booth flow + Profile-tab multi edit + transcript replay after reload)
+- [x] Carried: commit the multi-select work — landed on main via PR #2 before this session
+- [ ] Carried: eval harness/goldens still build single-token profiles — add multi-answer profiles once labels exist
+- [ ] Carried: reconcile with `line_plan.md` — shared vs per-user workspace, auto-consent vs explicit tick, CDN vs `@line/liff`, route/service naming
+- [ ] Carried: run the integration suite on a host with Docker — LINE tests and the funnel test have never executed
+- [ ] Carried: create the LINE Login / MINI App channel + LIFF app and set the three env vars
+- [ ] Carried: LIFF needs public HTTPS — tunnel to 3100 for dev; decide prod host
+- [ ] Carried: `line_plan.md` Phase D, Phase E, and B6 are unbuilt
+- [ ] Carried: decide the admin `/clients` invite UI's fate now that invites are break-glass only
+- [ ] Carried: `line_plan.md` / `data_storage_plan.md` untracked at repo root — commit or delete
+- [ ] Carried: `RedeemInvite.tsx`'s hardcoded "น้องภูมิ" loading copy duplicated in `LineLogin.tsx`
+- [ ] Carried: tag the five judgement dimensions (`tag_case_studies.py --narrative`, `--coverage`, `seed_case_tags.py --apply`)
+- [ ] Carried: confirm the Q4-Challenge / Q6-Objective overlap is wanted
+- [ ] Carried: review the two low-confidence (0.60) secondary industry tags; decide GrabMart's
+- [ ] Carried: sweep `case_match_tag_weight` in the eval harness once labels exist
+- [ ] Carried: rebuild + one live chat turn against a seat with a saved plan
+- [ ] Carried: decide whether `/w/plans/[id]` gets its own chat box
+- [ ] Carried: chat context covers the plan only — intake/market scan/cases invisible outside the 20-message window
+- [ ] Carried: browser click-through of the Profile tab's failure path — needs a real login session
+- [x] Carried: case-match embed host unreachable — embed server answered every probe this session
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key; verify gitignored, consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler for `purge_expired_messages.py`
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: G-I1 Thai/English switch not built
+- [ ] Carried: `plan_versions` missing `UNIQUE(plan_id, version_no)`
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` columns; 3 index-naming mismatches
+- [ ] Carried: `0051`/`0054`/`0055`/`0057` backfills lack defensive checks for unresolvable rows
+- [ ] Carried: long-tail backlog (ground-truth labels; placeholder rate card; prompt-injection pass; secrets rotation; `COOKIE_SECURE`+TLS; server-spec.md deck headings; `production_improvement.md` #18–25; remaining G-tasks)
