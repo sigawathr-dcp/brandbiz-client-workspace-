@@ -157,6 +157,12 @@ export interface CaseMatchItem {
 
 export interface CasesResult {
   matches: CaseMatchItem[]
+  // false when the run retrieved ZERO chunks — the seat can't reach any
+  // case file (unseeded / mis-scoped library, ADR 0002). Distinct from an
+  // empty `matches` with a reachable library, which means nothing scored
+  // above the floor. null/undefined on a bootstrap replay with no rows,
+  // where reachability can't be re-checked.
+  library_available?: boolean | null
 }
 
 export interface BudgetLine {

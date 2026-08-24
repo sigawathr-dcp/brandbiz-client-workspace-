@@ -9,10 +9,13 @@ It reads `case-study_<slug>.md`, one per campaign, from a source directory
 which is what replaced the old out-of-repo generator — then for each file:
   1. writes the blob via the existing `app.services.ingestion.save_upload`
      (same path POST /files uses),
-  2. inserts a `files` row with scope="org" and workspace_id stamped to the
-     demo workspace — required under D21/D22:
-     `workspace_visibility_filter` uses `column IS NOT DISTINCT FROM`, so a
-     client seat never sees workspace_id=NULL (internal-shared) rows,
+  2. inserts a `files` row with scope="library" and workspace_id=NULL
+     (ADR 0002). The library scope is readable by EVERY tenant — it has to
+     be: each LINE-minted client workspace is its own tenant (D24), so an
+     org-scoped corpus stamped to the demo workspace was invisible to every
+     real client and POST /client/cases matched nothing. It is also
+     independent of CLIENT_INTERNAL_ACCESS_ENABLED, which must stay off for
+     a public LINE entry point (line_plan.md, Risks #2),
   3. runs it through `app.services.ingestion.process_file` — chunk, embed,
      mark processed — unchanged, so this is exactly the pipeline a real
      upload goes through, and
@@ -24,9 +27,11 @@ which is what replaced the old out-of-repo generator — then for each file:
      somewhere for scripts/seed_case_tags.py to hang tags off. Production
      only ever writes that row lazily, on a case's first match.
 
-Idempotent: a file already present for this workspace (matched by
-filename + workspace_id) is left untouched — not re-uploaded, not
-re-embedded, not re-linked.
+Idempotent: a library file already present (matched by filename +
+scope="library") is left untouched — not re-uploaded, not re-embedded, not
+re-linked. The workspace argument only decides WHICH agent the corpus is
+attached to (the demo workspace's template agent, which every LINE
+workspace's agent is cloned from).
 
 `--refresh` widens that to "untouched unless its CONTENT changed": a file
 whose bytes on disk no longer match `files.sha256_hash` is re-ingested in
@@ -57,7 +62,7 @@ from sqlalchemy import delete, select
 from app.config import get_settings
 from app.models.agent import AgentFile
 from app.models.client_intake import CaseStudy
-from app.models.file import File, FileChunk
+from app.models.file import LIBRARY_SCOPE, File, FileChunk
 from app.models.user import User
 from app.models.workspace import Workspace
 from app.services import ingestion
@@ -185,7 +190,7 @@ async def main() -> None:
             await session.execute(
                 select(File).where(
                     File.filename.like("case-study_%"),
-                    File.workspace_id == workspace.id,
+                    File.scope == LIBRARY_SCOPE,
                 )
             )
         ).scalars().all()
@@ -208,7 +213,7 @@ async def main() -> None:
                     # moved here still has no catalog row and would be
                     # invisible to seed_case_tags.py. Fill that gap without
                     # touching a row that already exists.
-                    if await upsert_catalog_if_missing(session, row.id, workspace.id, path):
+                    if await upsert_catalog_if_missing(session, row.id, None, path):
                         cataloged += 1
                     skipped += 1
                     continue
@@ -218,7 +223,7 @@ async def main() -> None:
                 # case_matches row, so re-uploading as a new file would orphan
                 # a client's past match history and silently double the corpus.
                 await refresh_file(
-                    session, row, path, owner.id, workspace.id, storage_root
+                    session, row, path, owner.id, None, storage_root
                 )
                 refreshed += 1
                 continue
@@ -239,25 +244,25 @@ async def main() -> None:
                 size_bytes=len(data),
                 s3_key=s3_key,
                 is_processed=False,
-                scope="org",
-                workspace_id=workspace.id,
+                scope=LIBRARY_SCOPE,
+                workspace_id=None,
                 source="upload",
             )
             session.add(db_file)
             await session.commit()
 
             await ingestion.process_file(file_id)
-            await upsert_catalog(session, file_id, workspace.id, data)
+            await upsert_catalog(session, file_id, None, data)
             created += 1
 
-        # Attach every case-study file for this workspace to its agent —
+        # Attach every library case-study file to the workspace's agent —
         # not just the ones just created, so a partially-linked prior run
         # (e.g. interrupted before step 4) gets finished too.
         all_case_file_ids = (
             await session.execute(
                 select(File.id).where(
                     File.filename.like("case-study_%"),
-                    File.workspace_id == workspace.id,
+                    File.scope == LIBRARY_SCOPE,
                 )
             )
         ).scalars().all()
@@ -283,7 +288,7 @@ async def main() -> None:
                 .join(File, FileChunk.file_id == File.id)
                 .where(
                     File.filename.like("case-study_%"),
-                    File.workspace_id == workspace.id,
+                    File.scope == LIBRARY_SCOPE,
                     FileChunk.embedding.is_(None),
                 )
             )

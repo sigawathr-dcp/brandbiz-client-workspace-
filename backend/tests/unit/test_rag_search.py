@@ -87,6 +87,42 @@ class TestWorkspaceVisibility:
         assert "files.workspace_id" in client_sql
 
 
+class TestLibraryScope:
+    """ADR 0002 — the shared case corpus (files.scope = 'library') is a
+    third disjunct of R4, readable by every tenant and independent of the
+    D23 flag. Regression guard for the bug where every LINE-minted client
+    workspace (its own tenant, D24) retrieved zero case chunks because the
+    corpus was org-scoped to the demo workspace."""
+
+    def test_library_disjunct_present_for_client_seat(self):
+        client_user = _make_user(workspace_id=uuid.uuid4())
+
+        sql = str(_scope_filter(client_user, None).compile(compile_kwargs={"literal_binds": True}))
+
+        assert "files.scope = 'library'" in sql
+
+    def test_library_disjunct_is_not_workspace_gated(self):
+        """The library branch must stand alone — ANDing it with the tenant
+        predicate would reintroduce the exact invisibility being fixed."""
+        clause = _scope_filter(_make_user(workspace_id=uuid.uuid4()), None)
+        # Top level is OR(personal, org, library); the library leaf must be a
+        # bare comparison, not an AND wrapping a workspace_id predicate.
+        leaves = [str(c.compile(compile_kwargs={"literal_binds": True})) for c in clause.clauses]
+        library_leaves = [s for s in leaves if "'library'" in s]
+        assert len(library_leaves) == 1
+        assert "workspace_id" not in library_leaves[0]
+        assert "AND" not in library_leaves[0]
+
+    def test_file_ids_narrowing_still_admits_library_files(self):
+        """Agent attachments AND the R4 filter (see TestScopeFilter); the
+        library disjunct must survive that AND so attached corpus files stay
+        retrievable."""
+        sql = str(_scope_filter(_make_user(workspace_id=uuid.uuid4()), [uuid.uuid4()]).compile(compile_kwargs={"literal_binds": True}))
+
+        assert "files.id IN" in sql
+        assert "files.scope = 'library'" in sql
+
+
 class TestEffectiveWorkspaceOverride:
     """Regression guard for B1 (preview mode returns zero case matches):
     a staff previewer has user.workspace_id IS NULL, so the org branch must

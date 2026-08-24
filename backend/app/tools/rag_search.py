@@ -19,7 +19,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.embeddings import EmbeddingError, get_embedder
-from app.models.file import File, FileChunk
+from app.models.file import LIBRARY_SCOPE, File, FileChunk
 from app.models.user import User
 from app.services.workspace import (
     workspace_visibility_filter,
@@ -56,6 +56,11 @@ def _scope_filter(user: User, file_ids: list | None, effective_workspace_id=None
         users only see internal-shared org files; a client seat only sees
         org files scoped to its own workspace, never another workspace's
         and never the internal org corpus)
+      • library files: the shared case-study corpus, readable by every
+        tenant regardless of CLIENT_INTERNAL_ACCESS_ENABLED (ADR 0002 —
+        every LINE-minted workspace is its own tenant, so an org-scoped
+        corpus stamped to one workspace was invisible to all of them and
+        POST /client/cases returned zero chunks for every real client)
 
     When ``file_ids`` is given (e.g. an AI Agent's attached knowledge
     files), the corpus is narrowed to just those files — but R4 still
@@ -76,6 +81,7 @@ def _scope_filter(user: User, file_ids: list | None, effective_workspace_id=None
     access_filter = or_(
         and_(File.scope == "personal", File.user_id == user.id),
         and_(File.scope == "org", org_filter),
+        File.scope == LIBRARY_SCOPE,
     )
     if file_ids:
         return and_(File.id.in_(file_ids), access_filter)

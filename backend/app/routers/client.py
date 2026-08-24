@@ -476,14 +476,25 @@ _DIMENSION_TH: dict[str, str] = {
 }
 
 
-def _cases_out(rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None, str | None]]) -> dict:
+def _cases_out(
+    rows: list[tuple[CaseMatch, str, uuid.UUID, CaseCard | None, str | None]],
+    *,
+    library_available: bool,
+) -> dict:
     """`image_url` is passed in separately rather than read off `card`: the
     scraped corpus has no images at all, so the parsed CaseCard's image_url is
     always None and the thumbnail has to come from the case_studies catalog
     (populated offline by scripts/backfill_case_images.py). GET /client/
     bootstrap's replay already read the catalog; this is the fresh-match path
-    catching up, so a card doesn't gain its image only after a reload."""
+    catching up, so a card doesn't gain its image only after a reload.
+
+    `library_available` is False when retrieval saw ZERO chunks — the seat
+    can't reach any case file at all (unseeded corpus, scope misconfigured,
+    agent with no attachments). That is a setup fault, not "nothing matched
+    closely enough", and the two used to render identically; the frontend
+    now says which it is."""
     return {
+        "library_available": library_available,
         "matches": [
             {
                 "file_id": str(file_id),
@@ -538,6 +549,10 @@ async def _case_matches_for_run(session: AsyncSession, run_id: uuid.UUID) -> dic
         )
     ).all()
     return {
+        # A replay can't re-check reachability; a done run with stored rows
+        # necessarily saw the library. With no rows it's unknown, and the
+        # frontend falls back to the neutral "nothing matched" copy.
+        "library_available": True if rows else None,
         "matches": [
             {
                 "file_id": str(file_id),
@@ -1549,9 +1564,12 @@ async def run_case_match(
         if case_study is None:
             # Newly ingested/never-cataloged file — catalog it now instead
             # of failing the whole match (app/services/case_card.py already
-            # parsed it into `r.card`).
+            # parsed it into `r.card`). workspace_id stays NULL: the corpus
+            # is the shared library (ADR 0002), and stamping the first
+            # matching client's tenant onto a catalog row every other tenant
+            # reads would be wrong on its face.
             case_study = CaseStudy(
-                workspace_id=ctx.workspace_id, file_id=r.file_id,
+                workspace_id=None, file_id=r.file_id,
                 title=r.card.title if r.card else None,
                 client_name=r.card.client if r.card else None,
                 category=r.card.category if r.card else None,
@@ -1581,7 +1599,14 @@ async def run_case_match(
         details={"match_count": len(rows), "case_match_run_id": str(run.id)},
     )
 
-    return _cases_out(rows)
+    if match_run.chunks_retrieved == 0:
+        _logger.warning(
+            "case match: zero chunks reachable for workspace %s (agent files=%s) — "
+            "case library unseeded or not library-scoped? (ADR 0002)",
+            ctx.workspace_id,
+            None if agent_file_ids is None else len(agent_file_ids),
+        )
+    return _cases_out(rows, library_available=match_run.chunks_retrieved > 0)
 
 
 # ---------------------------------------------------------------------------

@@ -207,6 +207,20 @@ export default function CaseMatchCards({
       </div>
     )
   }
+  if (result && result.library_available === false) {
+    // Zero chunks reachable — a setup fault (unseeded / mis-scoped case
+    // library), not a scoring outcome. Must not read as "nothing similar".
+    return (
+      <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--ink-3)' }}>
+        The case library isn&apos;t available for this workspace yet.
+        {showDetail && (
+          <div style={{ marginTop: 4, fontSize: 11.5, fontFamily: 'monospace' }}>
+            Reason: retrieval returned 0 chunks — check the library seed / file scope (ADR 0002)
+          </div>
+        )}
+      </div>
+    )
+  }
   if (!result || result.matches.length === 0) {
     return (
       <div style={{ marginTop: 14, fontSize: 12.5, color: 'var(--ink-3)' }}>

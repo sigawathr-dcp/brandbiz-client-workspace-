@@ -218,6 +218,51 @@ class TestClientIsolationFlagOn:
         await engine.dispose()
 
 
+async def _insert_library_file(session: AsyncSession, *, owner: User, name: str) -> None:
+    session.add(File(
+        user_id=owner.id, filename=name, s3_key=f"/tmp/{name}",
+        scope="library", is_processed=True, workspace_id=None,
+    ))
+
+
+@pytest.mark.asyncio
+class TestCaseLibraryScope:
+    """ADR 0002 — a scope='library' file is visible to every tenant (both
+    seats and staff) under BOTH flag states, while org isolation between
+    seats is untouched. Runs the real rag_search._scope_filter and
+    routers.files.list_files, like the classes above."""
+
+    async def _assert_library_visible_to_everyone(self, session: AsyncSession) -> None:
+        world = await _build_world(session)
+        bystander = await _insert_user(
+            session, email=f"lib-owner-{uuid.uuid4().hex}@test.local", workspace_id=None
+        )
+        await _insert_library_file(session, owner=bystander, name="file-library")
+        await session.commit()
+
+        for user in (world.seat_a, world.seat_b, world.staff):
+            assert "library" in await _visible_via_scope_filter(session, user)
+            assert "library" in await _visible_files(session, user)
+
+        # Tenant isolation between seats is unchanged by the new disjunct.
+        assert "b" not in await _visible_via_scope_filter(session, world.seat_a)
+        assert "a" not in await _visible_via_scope_filter(session, world.seat_b)
+
+    async def test_flag_off(self, flag_off, db_engine_sync: str):
+        engine = create_async_engine(db_engine_sync, echo=False)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            await self._assert_library_visible_to_everyone(session)
+        await engine.dispose()
+
+    async def test_flag_on(self, flag_on, db_engine_sync: str):
+        engine = create_async_engine(db_engine_sync, echo=False)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            await self._assert_library_visible_to_everyone(session)
+        await engine.dispose()
+
+
 @pytest.mark.asyncio
 class TestPlanRatingIsolation:
     """PLAN.md Task 5.10 — a client seat must never be able to rate (or read

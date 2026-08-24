@@ -15,7 +15,7 @@ from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import VALID_STATUSES, VALID_VISIBILITIES, Agent, AgentFile
-from app.models.file import File
+from app.models.file import LIBRARY_SCOPE, File
 from app.models.user import User
 from app.services import audit as audit_svc
 from app.services.workspace import (
@@ -242,14 +242,16 @@ async def attach_knowledge_file(
     if agent.scalar_one_or_none() is None:
         raise HTTPException(404, "Agent not found")
 
-    # The file must be accessible (own personal, or org-scoped within the
-    # same tenant — D21/D22, mirrors app/tools/rag_search.py::_scope_filter)
+    # The file must be accessible (own personal, org-scoped within the same
+    # tenant — D21/D22 — or the shared case library, ADR 0002; mirrors
+    # app/tools/rag_search.py::_scope_filter)
     file_result = await session.execute(
         select(File).where(
             File.id == file_id,
             or_(
                 and_(File.scope == "personal", File.user_id == user.id),
                 and_(File.scope == "org", workspace_visibility_filter(user, File)),
+                File.scope == LIBRARY_SCOPE,
             ),
         )
     )

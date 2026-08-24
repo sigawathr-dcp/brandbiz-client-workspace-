@@ -28,7 +28,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import require_consent
 from app.models.classification import DataTier
-from app.models.file import File, FileChunk, VALID_SCOPES
+from app.models.file import LIBRARY_SCOPE, VALID_SCOPES, File, FileChunk
 from app.models.user import User
 from app.schemas.file import ChunkListOut, ChunkOut, FileListOut, FileOut, FileStatusOut
 from app.services.classifier import detect_tier
@@ -67,10 +67,14 @@ async def upload_file(
     cfg = get_settings()
 
     # --- Validate scope ---
-    if scope not in VALID_SCOPES:
+    # "library" (the shared case corpus, ADR 0002) is seed-only: it is
+    # readable by every tenant, so letting any upload claim it would be a
+    # cross-tenant write path.
+    uploadable = VALID_SCOPES - {LIBRARY_SCOPE}
+    if scope not in uploadable:
         raise HTTPException(
             status_code=422,
-            detail=f"scope must be one of {sorted(VALID_SCOPES)}",
+            detail=f"scope must be one of {sorted(uploadable)}",
         )
     # D23: every booth attendee shares one workspace (redeem_invite mints
     # into invite.workspace_id), so an org-scope upload from a client seat
@@ -176,6 +180,7 @@ async def list_files(
         or_(
             File.user_id == user.id,
             and_(File.scope == "org", workspace_visibility_filter(user, File)),
+            File.scope == LIBRARY_SCOPE,  # shared case corpus — ADR 0002
         )
     )
     if date_from is not None:
@@ -307,6 +312,7 @@ async def _get_accessible_file(
                 or_(
                     File.user_id == user.id,
                     and_(File.scope == "org", workspace_visibility_filter(user, File)),
+                    File.scope == LIBRARY_SCOPE,  # shared case corpus — ADR 0002
                 ),
             )
         )

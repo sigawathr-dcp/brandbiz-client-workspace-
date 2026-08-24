@@ -27,7 +27,15 @@ _data_tier_pg = PgEnum(
 )
 
 # Valid scope values (stored as VARCHAR to avoid PG enum migration pain — Gotcha #5).
-VALID_SCOPES: frozenset[str] = frozenset({"personal", "org"})
+#
+# "library" is the shared case-study corpus (ADR 0002): readable by EVERY
+# tenant — client seats and staff alike — independent of the D23
+# CLIENT_INTERNAL_ACCESS_ENABLED flag, and never writable through POST /files
+# (see app/schemas/file.py::VALID_SCOPES, which deliberately omits it; only
+# scripts/seed_case_studies.py stamps it). workspace_id is always NULL for a
+# library file.
+VALID_SCOPES: frozenset[str] = frozenset({"personal", "org", "library"})
+LIBRARY_SCOPE = "library"
 
 
 class File(Base):
@@ -53,7 +61,8 @@ class File(Base):
     detected_tier: Mapped[str | None] = mapped_column(_data_tier_pg, nullable=True)
     is_processed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # "personal" — only uploader can retrieve; "org" — all users can retrieve
-    # (narrowed by workspace_id below — see app/services/workspace.py).
+    # (narrowed by workspace_id below — see app/services/workspace.py);
+    # "library" — the shared case corpus, readable by every tenant (ADR 0002).
     scope: Mapped[str] = mapped_column(String(16), nullable=False, server_default="personal")
     # NULL = internal-shared file (unchanged pre-D21/D22 behavior). Set = scoped
     # to one client workspace — e.g. that client's case studies / rate card.
