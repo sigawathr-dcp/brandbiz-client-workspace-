@@ -200,3 +200,101 @@ def sha_drift(report: CorpusReport, manifest: dict[str, ManifestEntry]) -> list[
         if entry is not None and f.sha256_hash is not None and entry.sha256 != f.sha256_hash:
             drifted.append(f.filename)
     return sorted(drifted)
+
+
+# --- Case-study tags (the corpus side of the weighted matcher) ------------
+#
+# Reviewed tags live in backend/eval/case_match/case_tags.csv, committed the
+# same way corpus_manifest.csv is: a model proposes (scripts/
+# tag_case_studies.py), a human reviews, the reviewed file is what ships
+# (scripts/seed_case_tags.py reads only this). A model must not be able to
+# rewrite what the corpus MEANS as a side effect of a deploy.
+
+DEFAULT_CASE_TAGS_PATH = Path(__file__).resolve().parents[2] / "eval" / "case_match" / "case_tags.csv"
+
+
+@dataclass(frozen=True)
+class CaseTagEntry:
+    filename: str
+    tag_type: str
+    tag_value: str
+    confidence: float
+    note: str | None
+
+
+def load_case_tags(path: Path | str = DEFAULT_CASE_TAGS_PATH) -> list[CaseTagEntry]:
+    """Read the reviewed tag file, validating every token against the
+    controlled vocabulary.
+
+    Validation is here rather than at seed time because a typo'd tag is the
+    quietest possible failure mode: it never matches anything, so the case
+    simply looks unrelated to every client forever. Better to refuse the
+    file.
+    """
+    from app.services import case_taxonomy
+
+    path = Path(path)
+    if not path.exists():
+        return []
+    entries: list[CaseTagEntry] = []
+    seen: set[tuple[str, str, str]] = set()
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        for lineno, row in enumerate(csv.DictReader(f), start=2):
+            filename = (row.get("filename") or "").strip()
+            tag_type = (row.get("tag_type") or "").strip()
+            tag_value = (row.get("tag_value") or "").strip()
+            if not filename or not tag_type or not tag_value:
+                raise ValueError(f"{path}:{lineno}: filename, tag_type and tag_value are required")
+            try:
+                case_taxonomy.validate_tag(tag_type, tag_value)
+            except ValueError as exc:
+                raise ValueError(f"{path}:{lineno}: {exc}") from exc
+            key = (filename, tag_type, tag_value)
+            if key in seen:
+                raise ValueError(f"{path}:{lineno}: duplicate tag {key}")
+            seen.add(key)
+            raw_conf = (row.get("confidence") or "1.0").strip() or "1.0"
+            confidence = float(raw_conf)
+            if not 0 < confidence <= 1:
+                raise ValueError(f"{path}:{lineno}: confidence must be in (0, 1], got {confidence}")
+            entries.append(
+                CaseTagEntry(
+                    filename=filename,
+                    tag_type=tag_type,
+                    tag_value=tag_value,
+                    confidence=confidence,
+                    note=(row.get("note") or "").strip() or None,
+                )
+            )
+    return entries
+
+
+def write_case_tags(path: Path | str, entries: list[CaseTagEntry]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["filename", "tag_type", "tag_value", "confidence", "note"])
+        for e in sorted(entries, key=lambda e: (e.filename, e.tag_type, e.tag_value)):
+            writer.writerow([e.filename, e.tag_type, e.tag_value, f"{e.confidence:.2f}", e.note or ""])
+
+
+def tag_coverage(
+    manifest: dict[str, ManifestEntry], entries: list[CaseTagEntry]
+) -> dict[str, list[str]]:
+    """{filename: [dimensions with no tag]} across the committed corpus.
+
+    An untagged dimension is not a bug — case_score treats it as "unknown"
+    and defers to the embedding — but it IS the work queue, and a matcher
+    whose weights only bite on one dimension should say so out loud rather
+    than quietly reporting confident scores.
+    """
+    from app.services import case_taxonomy
+
+    by_file: dict[str, set[str]] = {}
+    for e in entries:
+        by_file.setdefault(e.filename, set()).add(e.tag_type)
+    return {
+        filename: sorted(set(case_taxonomy.DIMENSIONS) - by_file.get(filename, set()))
+        for filename in sorted(manifest)
+    }

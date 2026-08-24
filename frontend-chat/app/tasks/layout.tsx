@@ -61,7 +61,11 @@ export default async function TasksLayout({ children }: { children: React.ReactN
 
 async function AuthedSidebar({ token }: { token: string }) {
   const user = await getUser(token)
-  if (!user) redirect('/login')
+  // Token was present but the backend rejected it (expired/stale) — route
+  // through /api/session-expired to clear the cookie first, or
+  // middleware.ts (which only checks cookie presence) bounces straight
+  // back here forever. See that route's comment for the full loop.
+  if (!user) redirect('/api/session-expired')
   // Hermes (and therefore Tasks) defaults to L5/L6/ADMIN — see
   // 0030_hermes_model_catalog.py. Hiding the page for everyone else avoids
   // showing a form whose only possible outcome is a 403 on submit.
@@ -71,7 +75,11 @@ async function AuthedSidebar({ token }: { token: string }) {
 
 async function GatedContent({ token, children }: { token: string; children: React.ReactNode }) {
   const user = await getUser(token)
-  if (!user) redirect('/login')
+  // Token was present but the backend rejected it (expired/stale) — route
+  // through /api/session-expired to clear the cookie first, or
+  // middleware.ts (which only checks cookie presence) bounces straight
+  // back here forever. See that route's comment for the full loop.
+  if (!user) redirect('/api/session-expired')
   if (!canUseTasks(user.role)) redirect('/chat')
   // D21/D22, amended by D23 — belt-and-suspenders alongside canUseTasks:
   // every client seat is role=L1 (redeem_invite hardcodes it), so

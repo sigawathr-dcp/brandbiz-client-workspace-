@@ -46,6 +46,8 @@ def _allowed_decision(model_code: str = LOCAL_MODEL_CODE):
 
 
 def _new_conversation_session() -> AsyncMock:
+    # Two empty message windows (chat + unfiltered — see
+    # chat_policy.load_history_messages), then the auto-title sa_update.
     msg_result = MagicMock()
     scalars = MagicMock()
     scalars.all.return_value = []
@@ -54,7 +56,7 @@ def _new_conversation_session() -> AsyncMock:
     update_result = MagicMock()
 
     session = AsyncMock()
-    session.execute = AsyncMock(side_effect=[msg_result, update_result])
+    session.execute = AsyncMock(side_effect=[msg_result, msg_result, update_result])
     session.flush = AsyncMock()
     session.commit = AsyncMock()
     session.add = MagicMock()

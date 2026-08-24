@@ -6,7 +6,9 @@ StreamingResponse is started. This is the only place where an HTTP 403 can
 still be raised (once streaming starts, status is committed to 200).
 
 Flow:
-    1. Load + decrypt conversation history (§7.6 requires full payload).
+    1. Load + decrypt conversation history (§7.6 requires full payload) — as
+       two windows: the free-form turns the model is shown, and every turn
+       for the tier scan. See load_history_messages().
     2. Classify history + new message to detect the data tier.
     3. Resolve "auto" → local model code (D16: always start local unless explicit).
     4. PolicyEngine.decide() → the single gate for all LLM routing (§7.2).
@@ -45,6 +47,21 @@ from app.tools.intent import classify_intent
 from app.tools import rag_search
 
 
+# How many past messages a turn carries. Windowed from the END of the
+# conversation — see load_history_messages().
+_HISTORY_LIMIT = 20
+
+# ...and how much text those messages may add up to. A message count alone is
+# not a bound on prompt size: the client workspace writes machine-generated
+# turns (draft_plan()'s ~8k-char prompt and its raw JSON reply, research
+# findings) into the same thread, so 20 messages can be 70k+ characters — past
+# the local model's context window, at which point the server has no budget
+# left to generate and returns an EMPTY reply. Roughly 3 chars/token on Thai,
+# so this is ~8k tokens of history, leaving room for the system prompt, RAG
+# block, the new message and the answer inside a 16k window.
+_HISTORY_CHAR_BUDGET = 24_000
+
+
 @dataclass
 class PreparedChat:
     resolved_conversation_id: uuid.UUID
@@ -73,8 +90,37 @@ async def load_history_messages(
     session: AsyncSession,
     user_id: uuid.UUID,
     conversation_id: uuid.UUID | None,
-) -> tuple[uuid.UUID, list[dict]]:
-    """Resolve (or create) the conversation and return decrypted message history."""
+) -> tuple[uuid.UUID, list[dict], list[dict]]:
+    """Resolve (or create) the conversation and return its decrypted history.
+
+    Returns (conversation_id, generation_history, classification_history):
+
+      * generation_history — what the model is actually shown. FREE-FORM turns
+        only (`engagement_step_id IS NULL`), windowed and char-budgeted.
+      * classification_history — every turn in the window, machine ones
+        included, for the §7.6 tier scan. Never sent to a provider.
+
+    Why the two differ: services/plan.py::draft_plan shares the engagement's
+    conversation and persists its ~8k-char drafting prompt AND the raw JSON
+    reply into it, stamped with the 'plan' step. routers/client.py::
+    _chat_transcript already hides those from the client, but they used to
+    stay in the LLM window — so the last assistant turn the model saw was a
+    raw plan JSON blob, and asked for a plan in the chat box it copied that
+    format into the chat stream. Those chat-invented budget numbers bypass
+    rate_card.price(), which the whole plan pipeline exists to prevent
+    (see app/services/plan.py's module docstring).
+
+    Classification stays over the UNFILTERED window: what the model is not
+    shown can still not have been examined, and detect_tier() is local regex
+    — scanning more text costs nothing and only ever routes more
+    conservatively.
+
+    Both windows are the LAST _HISTORY_LIMIT messages, returned oldest-first.
+    It used to be `ORDER BY created_at LIMIT 20` — i.e. the FIRST 20 — so
+    past message 20 a conversation stopped moving: every turn re-sent the
+    same opening exchange and the model could not see what had just been
+    said.
+    """
     if conversation_id is None:
         conv = Conversation(user_id=user_id)
         session.add(conv)
@@ -92,13 +138,32 @@ async def load_history_messages(
             raise HTTPException(status_code=404, detail="Conversation not found")
         resolved_id = conversation_id
 
+    # Two windows, not one filtered afterwards: filtering a mixed last-20
+    # would leave a client who just drafted a plan with a near-empty chat
+    # window, and taking the last-20 chat turns alone would hand the model
+    # turns the tier scan never saw.
+    chat_history = await _window(session, resolved_id, chat_only=True)
+    classification_history = await _window(session, resolved_id, chat_only=False)
+
+    return resolved_id, _trim_to_char_budget(chat_history), classification_history
+
+
+async def _window(
+    session: AsyncSession, conversation_id: uuid.UUID, *, chat_only: bool
+) -> list[dict]:
+    """The last _HISTORY_LIMIT messages of `conversation_id`, oldest-first.
+
+    chat_only drops turns stamped with an engagement step — the same filter
+    routers/client.py::_chat_transcript uses to keep drafting machinery out
+    of the client's transcript.
+    """
+    stmt = select(Message).where(Message.conversation_id == conversation_id)
+    if chat_only:
+        stmt = stmt.where(Message.engagement_step_id.is_(None))
     result = await session.execute(
-        select(Message)
-        .where(Message.conversation_id == resolved_id)
-        .order_by(Message.created_at)
-        .limit(20)
+        stmt.order_by(Message.created_at.desc()).limit(_HISTORY_LIMIT)
     )
-    rows = result.scalars().all()
+    rows = list(reversed(result.scalars().all()))
 
     history: list[dict] = []
     for row in rows:
@@ -110,7 +175,26 @@ async def load_history_messages(
         )
         history.append({"role": row.role, "content": plaintext})
 
-    return resolved_id, history
+    return history
+
+
+def _trim_to_char_budget(
+    history: list[dict], budget: int = _HISTORY_CHAR_BUDGET
+) -> list[dict]:
+    """Drop the OLDEST messages until the window fits _HISTORY_CHAR_BUDGET.
+
+    Oldest-first in, oldest-first out — only the front is cut, so the most
+    recent exchange always survives (a single message longer than the whole
+    budget is kept rather than returning nothing to answer from).
+    """
+    used = 0
+    keep_from = len(history)
+    for i in range(len(history) - 1, -1, -1):
+        used += len(history[i]["content"])
+        if used > budget and i < len(history) - 1:
+            break
+        keep_from = i
+    return history[keep_from:]
 
 
 async def prepare_chat(
@@ -124,6 +208,7 @@ async def prepare_chat(
     workspace_id: uuid.UUID | None = None,
     mode: ResponseMode | None = None,
     reasoning_level: ReasoningLevel | None = None,
+    extra_context: str = "",
 ) -> PreparedChat:
     """
     Load history, classify, run policy decision, audit, and either raise 403
@@ -139,9 +224,19 @@ async def prepare_chat(
     mode is None, it defaults to THINKING for an agent with
     capabilities.think_longer=True, else INSTANT — an explicit request value
     always wins, mirroring how agent.model already overrides "auto".
+
+    extra_context: caller-built system context appended after the agent's
+    instructions — currently the client workspace's current plan
+    (app/services/plan.py::build_plan_context). It joins the classification
+    payload below like rag_ctx does, so injected client data raises the data
+    tier and is gated by PolicyEngine exactly like everything else (§7.6);
+    never bolt context on after prepare_chat() returns, which would route it
+    around that gate.
     """
     is_new = conversation_id is None
-    resolved_id, history = await load_history_messages(session, user.id, conversation_id)
+    resolved_id, history, classification_history = await load_history_messages(
+        session, user.id, conversation_id
+    )
 
     # ---- Load agent if provided ----
     agent = None
@@ -206,6 +301,9 @@ async def prepare_chat(
             },
         )
 
+    if extra_context:
+        agent_system_prompt = "\n\n".join(filter(None, [agent_system_prompt, extra_context]))
+
     # Auto-title new conversations from the first message (truncated to 60 chars)
     if is_new:
         title = user_content[:60].strip() or None
@@ -237,10 +335,19 @@ async def prepare_chat(
     # §7.6: classify full payload (all history + new message + retrieved context).
     # Including rag_ctx ensures that if a retrieved chunk contains confidential data
     # the entire request is treated at the higher tier (R3).
-    payload_parts = [f'{m["role"]}: {m["content"]}' for m in history]
+    #
+    # BOTH windows go in, concatenated: classification_history is the unfiltered
+    # one, `history` the char-budgeted chat one, and neither is a subset of the
+    # other once the budget has cut the front off. Duplicated text is harmless to
+    # a regex tier scan; an unscanned turn reaching a provider is not.
+    payload_parts = [
+        f'{m["role"]}: {m["content"]}' for m in (*classification_history, *history)
+    ]
     payload_parts.append(f"user: {user_content}")
     if rag_ctx:
         payload_parts.append(f"retrieved_context: {rag_ctx}")
+    if extra_context:
+        payload_parts.append(f"injected_context: {extra_context}")
     tier: DataTier = detect_tier("\n".join(payload_parts))
 
     # Log PII detection whenever tier-3+ data is present (regardless of routing outcome)

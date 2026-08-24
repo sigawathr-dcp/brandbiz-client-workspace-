@@ -47,8 +47,13 @@ type MdBlock =
   | { t: 'ol'; items: string[] }
   | { t: 'code'; lang: string; code: string }
   | { t: 'img'; alt: string; src: string }
+  | { t: 'table'; head: string[]; rows: string[][] }
   | { t: 'rule' }
   | { t: 'blank' }
+
+function splitTableRow(row: string): string[] {
+  return row.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+}
 
 function parseBlocks(src: string): MdBlock[] {
   const lines = src.split('\n')
@@ -78,6 +83,17 @@ function parseBlocks(src: string): MdBlock[] {
     }
     const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)/)
     if (imgMatch) { blocks.push({ t: 'img', alt: imgMatch[1], src: imgMatch[2] }); i++; continue }
+    if (
+      /^\s*\|/.test(line) &&
+      i + 1 < lines.length &&
+      /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])
+    ) {
+      const head = splitTableRow(line)
+      i += 2
+      const rows: string[][] = []
+      while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(splitTableRow(lines[i])); i++ }
+      blocks.push({ t: 'table', head, rows }); continue
+    }
     if (line.trim() === '') { blocks.push({ t: 'blank' }); i++; continue }
     const para: string[] = []
     while (
@@ -87,6 +103,7 @@ function parseBlocks(src: string): MdBlock[] {
       !lines[i].startsWith('```') &&
       !/^[*-] /.test(lines[i]) &&
       !/^\d+\. /.test(lines[i]) &&
+      !/^\s*\|/.test(lines[i]) &&
       !/^(-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim())
     ) { para.push(lines[i]); i++ }
     if (para.length) blocks.push({ t: 'p', text: para.join(' ') })
@@ -141,6 +158,25 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
               }}>
                 <code>{b.code}</code>
               </pre>
+            )
+          case 'table':
+            return (
+              <div key={i} className="md-table-wrap">
+                <table className="md-table">
+                  <thead>
+                    <tr>{b.head.map((h, j) => <th key={j}>{parseInline(h)}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {b.rows.map((r, j) => (
+                      <tr key={j}>
+                        {r.map((c, k) => (
+                          <td key={k} data-label={b.head[k] ?? ''}>{parseInline(c)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )
           case 'img':
             return (

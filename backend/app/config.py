@@ -50,6 +50,25 @@ class Settings(BaseSettings):
     file_storage_dir: str = "./data/files"     # local blob storage root (volume-mounted)
     max_upload_bytes: int = 50 * 1024 * 1024   # 50 MB per file
 
+    # Weighted case matching (app/services/case_score.py). The score a client
+    # sees is alpha * weighted-tag-score + (1 - alpha) * cosine-similarity.
+    # alpha = 0 reproduces the pre-tagging behaviour exactly — the rollback
+    # path and the eval harness's A/B baseline.
+    case_match_tag_weight: float = 0.7
+    # Candidate pool for rescoring. rag_top_k is a CHUNK budget applied
+    # before any weighting, so leaving it at 5 would let cosine pre-select
+    # the shortlist and make the weights decorative. Retrieval widens to this
+    # many chunks with the distance ceiling disabled, then the weighted score
+    # decides what actually surfaces.
+    case_match_pool_chunks: int = 200
+    # Floor on the blended score; below this a case is not shown at all.
+    case_match_min_score: float = 0.15
+    # How many cases the client is shown after rescoring. 3 per
+    # Matching_logic.xlsx ("Top 3 cases" / "Rank 2–3 Case") — the AE has to
+    # be able to explain every card that surfaces, so the list is kept to
+    # what a person will actually argue for.
+    case_match_top_n: int = 3
+
     # External APIs (Phase 2+)
     anthropic_api_key: str = ""
     openai_api_key: str = ""
@@ -102,6 +121,39 @@ class Settings(BaseSettings):
     # seat the workspace ever mints (PolicyEngine.decide() Rule 5).
     client_default_monthly_token_limit: int = 200_000
     client_default_workspace_budget: int = 2_000_000
+
+    # LINE Login (0063) — replaces single-use /try/<token> invite links as
+    # the client entry point. Blank channel id disables POST
+    # /public/line/login entirely (503), leaving /public/redeem as the only
+    # way in; that is the intended state until the LINE channel exists.
+    #
+    # The id_token is verified against LINE's own endpoint rather than
+    # locally: LINE signs with the channel secret (HS256) for some flows and
+    # ES256 for others, and delegating means we never track that, or the key
+    # rotation behind it. channel_id is sent as the expected audience.
+    line_login_channel_id: str = ""
+    line_login_channel_secret: str = ""
+    # Surfaced to the browser so the LIFF page can init without a round
+    # trip; a LIFF id is public by design (it appears in the liff.line.me
+    # URL), unlike the channel secret.
+    line_liff_id: str = ""
+    line_verify_url: str = "https://api.line.me/oauth2/v2.1/verify"
+    # A LINE seat gets exactly one run through the funnel: a returning login
+    # resumes the existing seat and its finished plan, but POST
+    # /client/engagements refuses to open a second brief. Set false to
+    # restore the pre-0063 behavior (engagement.py::start_new, seq 2, 3, ...).
+    client_single_engagement: bool = True
+
+    # The Agent row cloned into every self-serve workspace as its น้องภูมิ
+    # persona. agents.workspace_id is single-valued, so a workspace cannot
+    # share another's agent — workspace_svc.assign_agent() *moves* the row.
+    # The invite flow papered over this with a manual admin assignment after
+    # POST /admin/clients; a LINE login has no admin in the loop, so the
+    # workspace would come up agent-less and plan drafting 503s
+    # (services/plan.py::draft_plan). Blank = no cloning: the workspace is
+    # created anyway and an admin assigns an agent by hand, the pre-0063
+    # behavior.
+    client_template_agent_id: str = ""
 
     # Cookie settings
     cookie_domain: str = ""

@@ -62,7 +62,8 @@ _ENUM_DDL = [
             'vault_sync_completed','vault_sync_failed',
             'client_invited','client_redeemed','intake_answered','research_run',
             'case_matched','plan_created','plan_updated','plan_shared',
-            'plan_exported','lead_submitted'
+            'plan_exported','lead_submitted','intake_edited',
+            'messages_purged','engagement_started','client_line_login'
         );
     EXCEPTION WHEN duplicate_object THEN NULL; END $$""",
     """DO $$ BEGIN

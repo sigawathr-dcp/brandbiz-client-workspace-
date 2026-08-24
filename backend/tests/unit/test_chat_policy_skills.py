@@ -60,10 +60,12 @@ def _allowed_decision(model_code: str = LOCAL_MODEL_CODE, downgrade: bool = Fals
 
 
 def _new_conversation_session() -> AsyncMock:
-    """Session mock for conversation_id=None: one execute() for the empty
-    message-history query, one for the title/agent_id sa_update. All other
-    DB activity (agent/skill lookups) is patched at the service-function
-    level below, so this fixed pair is never exceeded.
+    """Session mock for conversation_id=None: two execute()s for the empty
+    message-history windows (the free-form one the model is shown and the
+    unfiltered one the §7.6 tier scan reads — see
+    chat_policy.load_history_messages), one for the title/agent_id sa_update.
+    All other DB activity (agent/skill lookups) is patched at the
+    service-function level below, so this fixed triple is never exceeded.
     """
     msg_result = MagicMock()
     scalars = MagicMock()
@@ -73,7 +75,7 @@ def _new_conversation_session() -> AsyncMock:
     update_result = MagicMock()
 
     session = AsyncMock()
-    session.execute = AsyncMock(side_effect=[msg_result, update_result])
+    session.execute = AsyncMock(side_effect=[msg_result, msg_result, update_result])
     session.flush = AsyncMock()
     session.commit = AsyncMock()
     session.add = MagicMock()

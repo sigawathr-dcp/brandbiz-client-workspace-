@@ -50,6 +50,21 @@ _audit_action_pg = PgEnum(
     "plan_exported", "lead_submitted",
     # Client workspace redesign (0045, PLAN.md Task 5.10)
     "plan_rated",
+    # Editable company profile (0048, PLAN.md Task 5.11)
+    "intake_edited",
+    # D14 message retention (0047) — added to the PG type there, but
+    # missing from this ORM-side label list until now; harmless at runtime
+    # (SQLAlchemy doesn't validate raw-string PG enum values by default)
+    # but the two were out of sync. See app/services/retention.py.
+    "messages_purged",
+    # Client Workspace DB redesign (0050) — a seat starting a fresh
+    # engagement (POST /client/engagements), distinct from the original
+    # client_redeemed (invite -> first seat) event.
+    "engagement_started",
+    # LINE Login as the client entry point (0063) — a LINE identity bound to
+    # a seat. Re-emitted on every returning login, so repeat visits are
+    # visible in the trail; client_redeemed stays for the invite path.
+    "client_line_login",
     name="audit_action",
     create_type=False,
 )

@@ -7,8 +7,8 @@ import type { Journey } from './journey'
 // row of pips (one per intake question). Purely a view over journey.ts.
 export default function ChatProgress({ journey }: { journey: Journey }) {
   return (
-    <div className="client-chat-progress" style={{ flex: 'none', width: 250 }}>
-      <div className="client-chat-hint" style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
+    <div className="client-chat-progress" style={{ flex: 'none' }}>
+      <div className="client-chat-hint" style={{ alignItems: 'baseline', gap: 6, marginBottom: 4 }}>
         <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--ink-2)' }}>
           {journey.answered}/{journey.totalSteps}
         </span>

@@ -2193,4 +2193,443 @@ Mid-session, `git stash`/`git stash pop` collided with a concurrent session (see
 - [ ] Amend PLAN.md §7.4 ("first token <2s") — carried, untouched
 - [ ] Rebuild+recreate `frontend-chat`/`backend-api` containers and do a real click-through — carried, untouched; now also covers this session's retention/agent-identity/field-manifest changes
 - [ ] `alembic upgrade head` still not run for 0044/0045 — carried (see 0047 note above, now grouped)
+
+## 2026-08-11 14:56 — main @ 204b964
+
+**Summary:** Implemented PLAN.md Task 5.11 — the client workspace Profile tab (`WorkPanel.tsx`) was strictly read-only; a client who mistyped an intake answer had no way to fix it before walking away with a plan built on the wrong data. Added an edit-and-resubmit path: `PATCH /client/intake/fields` corrects one or more already-answered fields (only fields already reached — `idx < profile.step` — are editable, so an edit can never skip ahead of the scripted intake or reopen a completed intake), and `PUT /client/plans/{id}` (`plan_svc.revise_plan`) saves a re-drafted plan as the next `PlanVersion` on the *same* plan row instead of a disconnected duplicate — the `plan_updated` audit action and `plan_versions` schema existed for exactly this since Task 5.4 but nothing ever wrote past v1. `revise_plan` deliberately never touches `plan.status`, which stays `"draft · awaiting expert review"` per the liability-control note in PLAN.md's Phase 5 section. Saving an edit while intake is already complete re-runs the full research → case-match → draft pipeline client-side (both endpoints were already idempotent — `/research` is latest-wins, `/cases` already delete-and-replaces per conversation — so no backend change was needed there), so the plan a client ends up with never cites stale market data. Along the way, fixed two pre-existing bugs the edit form would otherwise have inherited: `handlePickChip` was optimistically writing the Thai chip *label* into `fields` state while the backend stores the English option *value*, and the free-text intake path never updated `fields` at all — both fixed by trusting a new canonical `fields` object the backend now returns from both `POST /client/intake/answer` and `PATCH /client/intake/fields`, rather than the frontend guessing.
+
+**Files changed:**
+- `backend/app/services/client_intake.py` — `field_manifest()` now includes each field's chip options; new `index_of_field()`
+- `backend/app/services/rate_limit.py` — extracted `check()` (bucket-key-based) out of the IP-keyed `rate_limit()` dependency, so a non-HTTP caller can rate-limit by an arbitrary key (here, `user.id` — D23 puts every booth attendee behind one shared NAT IP, so IP-keying would let one attendee lock out the whole booth)
+- `backend/app/routers/client.py` — new `PATCH /client/intake/fields` (`edit_intake_fields`) and `PUT /client/plans/{plan_id}` (`revise_plan`); `IntakeAnswerOut`/`IntakeFieldOut` gain `fields`/`options`
+- `backend/app/services/plan.py` — new `revise_plan()`; `list_versions()` docstring updated (no longer claims only v1 is ever written)
+- `backend/alembic/versions/0048_intake_edited_audit_action.py` — new; `intake_edited` audit_action enum value
+- `backend/app/models/audit.py`, `backend/tests/integration/conftest.py` — mirrored the new `intake_edited` enum value (enum-sync test requires both)
+- `frontend-chat/components/client/types.ts` — `IntakeField.options`, `IntakeAnswerResponse.fields`
+- `frontend-chat/components/client/ClientWorkspace.tsx` — `answerIntake` now sets `fields` from the server's canonical response (fixes the label/value + free-text bugs above); `runDraftPlan` gains a `force` option; `handleSavePlan` branches PUT-revise vs. POST-create on whether a saved plan already exists; new `handleSaveProfile` cascade (edit → if intake complete, reset research/cases/plan status → re-run research+cases+draft)
+- `frontend-chat/components/client/WorkPanel.tsx` — Profile tab gained an edit mode (per-field chip re-pick + free-text override, Save & regenerate / Cancel footer)
+- `frontend-chat/components/client/PlanDraftCard.tsx` — new `nextVersion` prop, save button reads "Save as vN" when revising
+- `frontend-chat/lib/clientBff.ts` — `proxyJson`'s method union widened to include `PATCH`/`PUT`
+- `frontend-chat/app/api/client/intake/fields/route.ts` — new BFF route (PATCH)
+- `frontend-chat/app/api/client/plans/[id]/route.ts` — added a PUT handler alongside the existing GET
+- `backend/tests/unit/test_client_intake.py` — extended `TestFieldManifest` (options match script order); new `TestIndexOfField`
+- `backend/tests/unit/test_client_router_intake_edit.py` — new; 5 tests for `edit_intake_fields` (edit an answered field, reject unknown/not-yet-answered fields, no-op writes no audit row, never touches `completed_at`)
+- `backend/tests/unit/test_plan_revise.py` — new; 4 tests for `revise_plan` (version bump + exactly one new `PlanVersion`, status never changes, audit log shape, 404 on a foreign plan)
+- `PLAN.md` — Task 5.11 added and marked `☑` with a verification summary
+
+**Verification:** Backend: `uv run pytest tests/unit` — 762 passed, 33 failed, 3 skipped; every failure is in a file this session did not touch (`test_audit.py`, `test_crypto.py`, `test_google_llm.py`, `test_llm_tuning.py`, `test_orchestrator.py`, `test_vault_connection.py`, `test_consent.py`) and reproduces the same `ENCRYPTION_KEY`-length/SDK-stub profile documented as pre-existing under Tasks 5.9/5.10 — confirmed by `git status --porcelain` on those exact files returning nothing. All 4 new/extended test files for this task pass cleanly (`test_plan_revise.py` needed its own valid-32-byte-key fixture, same pattern as `test_agent_tasks.py`/`test_studio.py`, since the default unit-test `ENCRYPTION_KEY` in `tests/unit/conftest.py` decodes to 28 bytes — invalid for AES-GCM — which is also the root cause of the 33 pre-existing failures above). A standalone import check with real env vars confirmed both new routes are registered (`PATCH /client/intake/fields`, `PUT /client/plans/{plan_id}`) and `revise_plan`/`rate_limit.check`/`index_of_field` all resolve. Frontend: `npx tsc --noEmit -p tsconfig.json` clean, zero errors repo-wide. `next lint` could not run — no ESLint config exists yet in this project (ships an interactive first-run prompt); pre-existing gap, not attempted to fix here. No live browser click-through or container rebuild this session — see Next steps.
+
+**Next steps:**
+- [ ] New: no live browser walkthrough of Task 5.11 — needs `frontend-chat`/`backend-api` container rebuild (no source mount) then a real click-through: complete intake → draft → save (v1) → edit a field from the Profile tab → Save & regenerate → confirm research/cases visibly re-run → save again (v2) → confirm the versions rail on `/w/plans/{id}` shows both rows and the header still reads "awaiting expert review"; also verify the 429 on a second resubmit within 60s and that a chip-answered field's value survives a page reload unchanged (the label/value bug fix)
+- [ ] New: found but out of scope this session — `messages_purged` (added by migration `0047`) is still missing from `app/models/audit.py`'s `_audit_action_pg` list, same class of gap `test_audit_enum_sync.py` exists to catch; only `intake_edited` was added/verified here since that's what this session's migration introduced
+- [ ] `alembic upgrade head` still not run against any real database — now four migrations deep (0044/0045/0047/0048) — carried, growing
+- [ ] No scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily — carried, untouched
+- [ ] `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ" — carried, untouched
+- [ ] Continue the gap-closure plan: Commit 2 (user-preferences endpoint), Commit 3 (G-A4 Prompt Assistant), Commit 4 (G-A3 Arena mode) — carried, untouched
+- [ ] Amend PLAN.md §7.4 ("first token <2s") — carried, untouched
+- [ ] Long-tail backlog carried, untouched: ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks
 - [ ] Carried, untouched this session: everything from every prior entry (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; long-tail backlog)
+
+## 2026-08-11 — main @ 204b964
+
+**Summary:** Two pieces of work this session. First, fixed a systemic `ERR_TOO_MANY_REDIRECTS` bug the user hit while testing 5.11: `middleware.ts` only checks whether the `access_token` cookie *exists*, not whether the backend still accepts it, while every protected layout (`(admin)`, `(client)`, `agent`, `chat`, `library`, `skills`, `studio`, `tasks`) redirected a rejected token straight to `/login` without clearing the stale cookie (Server Components can't mutate cookies) — an infinite bounce. Added `app/api/session-expired/route.ts` (a Route Handler, which can) and routed all 8 layouts' "backend rejected this token" branches through it instead. Second, implemented PLAN.md Task 5.12: the user noticed that after creating a plan they couldn't switch to a different one. Root cause was 5.11's revise-in-place logic (`revising = !!savedPlan`) forcing every subsequent save into a PUT revision of the same row forever, plus bootstrap forcing `planDrafted=true` on reload so "Draft my plan" never came back — even though nothing in the schema actually limited a seat to one plan (`plans` has no unique constraint on `(workspace_id, user_id)`). Replaced the single `savedPlan` with a `plans` list + `activePlanId` (a per-device `localStorage` preference), added a top-bar plan switcher popover, and made the draft card ask each time — "Save as vN of …" (revise) vs. "Save as a new plan" (independent row). Also closed a second, related gap found during design: `plan_versions` never captured `title`/`provenance`, so a revision silently destroyed what an earlier version actually said — added migration `0049` (nullable `title`/`provenance` columns), had `save_plan`/`revise_plan` snapshot both, and added a read-only `GET /client/plans/{id}/versions/{v}` so the Versions rail's rows are now genuinely clickable and show that version's real body instead of being dead history.
+
+**Files changed:**
+- `frontend-chat/app/api/session-expired/route.ts` — new; clears `access_token` then redirects to `/login`
+- `frontend-chat/app/{chat,agent,library,skills,studio,tasks}/layout.tsx`, `frontend-chat/app/(client)/layout.tsx`, `frontend-chat/app/(admin)/layout.tsx` — "backend rejected this token" branches now redirect through `/api/session-expired` instead of `/login` directly
+- `backend/alembic/versions/0049_plan_version_snapshot.py` — new; nullable `title`/`provenance` on `plan_versions`
+- `backend/app/models/plan.py` — `PlanVersion` gains `title`/`provenance` columns
+- `backend/app/services/plan.py` — `save_plan`/`revise_plan` snapshot title/provenance onto the `PlanVersion` they write; new `get_version()`/`decrypt_version_body()`; `list_versions()` docstring notes it has no ownership check
+- `backend/app/routers/client.py` — new `PlanSummaryOut`/`PlanVersionBodyOut` schemas; `BootstrapOut.latest_plan` (single) → `BootstrapOut.plans` (list); new `GET /client/plans/{plan_id}/versions/{version}` (falls back to the parent Plan's title, never its provenance, for a pre-0049 version); module docstring endpoint table updated
+- `frontend-chat/components/client/types.ts` — new `PlanSummary`/`PlanVersionBody`; `BootstrapData.latest_plan` → `plans`; `Turn.planSaveError`
+- `frontend-chat/components/client/ClientWorkspace.tsx` — `savedPlan`/`planCount` state replaced with `plans`/`activePlanId` (+ `localStorage`-backed `activePlanStorageKey`); bootstrap no longer forces `planDrafted=true` on reload; `handleSavePlan` takes an explicit `mode: 'revise' | 'new'` and surfaces save failures on the turn instead of only `console.error`; top-bar "My plans" link replaced with a switcher popover; "Draft my plan" reads "Draft another plan" once a plan exists
+- `frontend-chat/components/client/PlanDraftCard.tsx` — `onSave` now takes a mode; when an active plan exists, offers two buttons ("Save as vN of …" / "Save as a new plan") plus a `saveError` line
+- `frontend-chat/components/client/PlanDocument.tsx` — new `viewingVersion` state; fetches and renders an older version's own snapshot with a "Viewing vN · Back to latest" banner; hides rating/share/export/lead-CTA while viewing history
+- `frontend-chat/components/client/PlanSideRail.tsx` — Versions rows are now clickable buttons; Provenance renders the *viewed* version's provenance (or "wasn't recorded for this version"), not always the parent plan's
+- `frontend-chat/components/client/PlansListPage.tsx` — cards show an "Active" pill matching the stored active plan id
+- `frontend-chat/app/globals.css` — new `.client-plan-switcher` class (width capped against the viewport, per the inline-style-except-breakpoints convention)
+- `frontend-chat/app/api/client/plans/[id]/versions/[version]/route.ts` — new BFF route (GET, hand-rolled like its `plans/[id]` GET sibling)
+- `backend/tests/unit/test_plan_revise.py` — extended: the `PlanVersion` a revision writes now asserted to carry the *new* title/provenance
+- `backend/tests/unit/test_plan_versions.py` — new; `get_version`/`decrypt_version_body` (match found + decrypts, unknown version 404s, foreign plan 404s via `get_plan`, round-trip)
+- `backend/tests/unit/test_client_router_plan_version.py` — new; the endpoint's own title-fallback logic (own title when present vs. parent Plan's title, never its provenance, when absent)
+- `backend/tests/unit/test_client_router_save_plan.py` — new; `save_plan()` never queries for an existing plan before inserting (pins that "Save as a new plan" can't collide with/overwrite one)
+- `PLAN.md` — Task 5.12 added and marked `☑` with a verification summary
+
+**Verification:** Backend: `uv run pytest tests/unit` — 786 passed, 16 failed, 3 skipped; every failure is in a file this session did not touch (`test_audit.py`, `test_consent.py`, `test_crypto.py`, `test_google_llm.py`, `test_vault_connection.py`) and matches the pre-existing `ENCRYPTION_KEY`-length/SDK-stub profile documented under 5.9–5.11 (down from 33 failures in the 5.11 entry — `test_llm_tuning.py`/`test_orchestrator.py` passed this run, apparently host-env flakiness rather than anything this session changed). All 14 new/extended tests for this task pass. A standalone import check (`uv run python -c "import app.main"` with real env vars) confirmed `GET /client/plans/{plan_id}/versions/{version}` is registered alongside the existing plan routes. Frontend: `npx tsc --noEmit` clean, and `npm run build` (a real production build, not just typecheck) compiled with zero errors/warnings across every route including the new versions BFF route. No live browser click-through or container rebuild this session — containers have no source mount, same standing gap as every prior entry.
+
+**Next steps:**
+- [ ] New: no live browser walkthrough of Task 5.12 or the redirect-loop fix — needs `frontend-chat`/`backend-api` container rebuild then: (a) log in with a stale/expired cookie and confirm it's cleared instead of looping; (b) save plan v1, edit profile, regenerate, choose "Save as a new plan", confirm the switcher lists both and the new one is active; (c) switch back to plan #1, regenerate again, choose "Save as v2 of …", confirm plan #1 bumps and the switcher count stays at 2; (d) on `/w/plans/{id}` click v1 in the Versions rail, confirm its original title/body render with a "Back to latest" banner and rating/share/export are hidden; (e) reload `/w` and confirm "Draft another plan" is available and the active plan survived
+- [ ] Carried from 5.11: `messages_purged` (migration `0047`) still missing from `app/models/audit.py`'s `_audit_action_pg` list — out of scope again this session (0049 added no enum values)
+- [ ] `alembic upgrade head` still not run against any real database — now five migrations deep (0044/0045/0047/0048/0049) — carried, growing
+- [ ] No scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily — carried, untouched
+- [ ] `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ" — carried, untouched
+- [ ] Continue the gap-closure plan: Commit 2 (user-preferences endpoint), Commit 3 (G-A4 Prompt Assistant), Commit 4 (G-A3 Arena mode) — carried, untouched
+- [ ] Amend PLAN.md §7.4 ("first token <2s") — carried, untouched
+- [ ] Long-tail backlog carried, untouched: ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks
+
+## 2026-08-16 — main @ 204b964
+
+**Summary:** Full database redesign for the client workspace's 4-step funnel (Interview → Market scan → Case match → Plan & budget), an ad hoc cross-cutting piece of work (not a numbered PLAN.md task) requested directly by the user after reviewing a diagram of the current vs. proposed schema. The core problem: nothing in the schema represented "one client's run through the 4 steps" — `client_profiles`/`research_runs`/`case_matches`/`plans` were glued together only by repeating `(workspace_id, user_id, conversation_id)` on each table, the journey itself was reconstructed from scratch in the browser (`journey.ts`), and step 3's zero-match case queried `audit_log` as if it were application state. Added `Engagement`/`EngagementStep` as the missing backbone (uniform 5-state lifecycle for all 4 steps), normalized the interview into `intake_scripts/questions/options/answers` (chip picks are now queryable FKs, not one encrypted JSON blob; free text stays encrypted), split `research_runs`/`case_matches` off their ad hoc JSONB into real `research_findings/citations` and `case_studies/case_match_runs` tables, and split `plans` into a head row (`Plan`) + versioned content (`PlanVersion` + `PlanBudgetLine` + `PlanSource`) so money is `NUMERIC` with a real FK to `rate_card_items` instead of a JSON string array. Eight new migrations (`0050`–`0057`, expand → backfill → contract) plus one more (`0058`) for a new audit action; all preserve existing data via Python-side decrypt/re-encrypt and JSONB-exploding backfills, verified end-to-end against a real dockerized Postgres (full chain from `0001_baseline`, downgrade/upgrade round-trip for the reversible stages `0050`–`0056`, `0057` intentionally irreversible). Rewrote `app/routers/client.py`, `app/services/{plan,client_intake,lead}.py`, and added `app/services/engagement.py`; kept the API response *shapes* backward-compatible (same `research_status`/`cases_status`/`budget`/`provenance` JSON contracts) so the frontend needed only a small, targeted diff rather than a rewrite: `engagement_id`/`active_plan_id` added to bootstrap, and the old `bb:activePlan:*` localStorage key replaced with a new `POST /client/plans/{id}/activate` endpoint (server-side "which plan is active" state, not a per-device browser preference). Along the way fixed two pre-existing drifts: `messages_purged` (added to the DB by migration `0047`) was missing from `app/models/audit.py`'s `_audit_action_pg` list, and `HermesHostJob` was imported in `models/__init__.py` but absent from `__all__`.
+
+**Files changed:**
+- `backend/app/models/engagement.py` — new; `Engagement` (`seq`, partial-unique "one active per seat"), `EngagementStep` (`step_no` 1–4, uniform `idle/running/done/failed/skipped` status)
+- `backend/app/models/intake.py` — new; `IntakeScript`/`IntakeQuestion`/`IntakeOption`/`IntakeAnswer` (append-only, chip picks store `option_id` not ciphertext)
+- `backend/app/models/client_intake.py` — rewritten; `ClientProfile` removed (→ `Engagement`+`IntakeAnswer`); `ResearchRun` slimmed + encrypted `query_*`; new `ResearchFinding`/`ResearchCitation`/`ResearchFindingCitation`/`CaseStudy`/`CaseMatchExecution`; `CaseMatch` slimmed to `case_match_run_id`+`case_study_id`+`rank`
+- `backend/app/models/plan.py` — rewritten; `Plan` slimmed to a head row (`current_version_id`); `PlanVersion` gains `version_no`(renamed)/NOT-NULL `title`/totals; new `PlanBudgetLine`/`PlanSource`/`PlanDraft`
+- `backend/app/models/conversation.py` — `workspace_id`/`engagement_id`/`kind` columns; added missing `onupdate` on `updated_at`
+- `backend/app/models/message.py` — `engagement_step_id` (nullable, not yet populated by chat — see Next steps)
+- `backend/app/models/lead.py` — `engagement_id` column
+- `backend/app/models/audit.py` — added missing `messages_purged` label; new `engagement_started` action
+- `backend/app/models/__init__.py` — updated exports; fixed `HermesHostJob` `__all__` omission
+- `backend/alembic/versions/0050_engagements.py` … `0058_engagement_started_action.py` — new; the expand → backfill → contract migration chain (see summary)
+- `backend/app/services/engagement.py` — new; `get_or_create_active`/`start_new`/`get_step(s)`/`mark_step`/`set_active_plan` — the only code allowed to write `engagement_steps.status`
+- `backend/app/services/client_intake.py` — `INTAKE_SCRIPT` kept as seed data (migration `0052` reads it once); new `*_db` functions (`step_at_db`, `field_manifest_db`, `option_id_at_db`, etc.) read the DB catalog at request time; fixed an `IntakeOption` name collision between the pre-existing pure `TypedDict` and the new ORM import (aliased to `IntakeOptionRow`)
+- `backend/app/services/plan.py` — rewritten; `draft_plan()` now resolves research/cases via the engagement's own step records (fixes a real scoping bug: the old filter wasn't scoped by `conversation_id` like every other reader, so a seat with 2 conversations could get a plan drafted from the wrong research run); new `budget_out`/`provenance_out` reassemble the old JSON shapes from the normalized tables so the API contract didn't need to change
+- `backend/app/services/lead.py` — `submit()` reads the plan title from its current `PlanVersion` (no longer a `Plan` column); new `engagement_id` param
+- `backend/app/services/rate_limit.py` — no functional change, touched only via the redesign's rate-limit-key test fix (see tests)
+- `backend/app/routers/client.py` — rewritten; `_load_fields`/`_record_answer` (append-only, supersede-on-edit) replace the old encrypt/decrypt-a-blob helpers; every step transition now calls `engagement_svc.mark_step`; the old `audit_log` zero-match probe is gone entirely; new `POST /client/engagements` (start a second brief) and `POST /client/plans/{id}/activate`
+- `backend/app/routers/client_public.py` — the plan share page reads title/budget from the current `PlanVersion`, not the old `Plan` columns
+- `backend/tests/integration/conftest.py` — added `messages_purged`/`engagement_started` to the hardcoded `audit_action` enum DDL (was already missing `messages_purged` before this session, from `0047`)
+- `backend/tests/integration/test_engagement_funnel.py` — new; 5 tests against real Postgres (bootstrap creates 4 idle steps, insight off-by-one, edit-rejects-not-yet-reached + append-only history, zero-match case run reports done/0 with no audit probe, save→revise version bump)
+- `backend/tests/unit/test_client_bootstrap_replay.py`, `test_client_router_intake.py`, `test_client_router_intake_edit.py`, `test_client_router_plan_version.py` — deleted; hard-mocked the old `ClientProfile`/router internals this redesign replaced structurally (the title-fallback logic `test_client_router_plan_version.py` pinned doesn't exist anymore — `PlanVersion.title` is `NOT NULL` now) — superseded by `test_engagement_funnel.py` and `test_plan_output_shapes.py`
+- `backend/tests/unit/test_plan_output_shapes.py` — new; `budget_out`/`provenance_out`'s "no rows recorded → None, never fabricate" behavior
+- `backend/tests/unit/test_client_router_save_plan.py`, `test_plan_drafting_prompt.py`, `test_plan_provenance.py`, `test_plan_revise.py`, `test_plan_versions.py` — rewritten for the new `Engagement`-taking signatures and head/version split
+- `frontend-chat/components/client/types.ts` — `BootstrapData.engagement_id`/`active_plan_id` (new); `conversation_id` now nullable
+- `frontend-chat/components/client/ClientWorkspace.tsx` — `bb:activePlan:*` localStorage reads/writes replaced with `data.active_plan_id` on load and a `POST /client/plans/{id}/activate` call on manual switcher pick
+- `frontend-chat/app/api/client/plans/[id]/activate/route.ts` — new BFF route
+
+**Verification:** Full migration chain (`0001_baseline` → `0058_engagement_started_action`) run against a fresh dockerized `pgvector/pgvector:pg16` — clean. Downgrade `0058`→`0049`→ re-upgrade to `0058` round-tripped cleanly (stages `0050`–`0056` all have working `downgrade()`s; `0057` deliberately does not, same precedent as `0048`). Confirmed via `\d` that the resulting schema matches the ORM models exactly, and that the intake catalog seed produced 1 script / 8 questions / 36 options with Thai text intact. Live-probed `engagement_svc` (idempotent `get_or_create_active`, partial-unique-active-per-seat rejects a second active row, `start_new` archives+creates) and the router's intake helpers (chip round-trip, encrypted free-text round-trip, edit-supersedes-with-append-only-history) directly against that database. `backend/tests/unit`: 750 passed, 1 skipped, 0 failed (excluding 4 files with 13 pre-existing failures, confirmed via `git stash` to be present and identical on unmodified `HEAD` — unrelated to this session: `test_audit.py`, `test_consent.py`, `test_crypto.py`, `test_google_llm.py`). `backend/tests/integration/test_engagement_funnel.py`: 5/5 passed against real Postgres. Frontend: `npx tsc --noEmit` clean, zero errors repo-wide. No live browser click-through — see Next steps.
+
+**Next steps:**
+- [x] `messages_purged` missing from `app/models/audit.py`'s `_audit_action_pg` — fixed this session
+- [x] `alembic upgrade head` validated against a real Postgres — done this session, but only against **fresh/scratch** containers, not the actual persistent dev DB (`brandbiz-client-workspace-postgres-1`, up since before this session) — that DB has never had `0044` onward applied at all; running the redesign chain against it is new work, not yet done, and `0057` is a one-way door (drops `client_profiles` and the old `plans`/`research_runs`/`case_matches` columns) — **take a backup first**
+- [ ] No live browser click-through of the redesigned funnel — needs `frontend-chat`/`backend-api` container rebuild (no source mount, same standing gap as every prior entry) — click through: fresh intake → edit a field → market scan → case match (incl. a zero-result workspace) → draft → save → revise (v2) → switcher → `POST /client/engagements` for a second brief on the same seat
+- [ ] Deferred, deliberately, this session: `plan_drafts` table exists (persists `POST /client/plan/draft`'s body) but nothing writes to it yet — `/plan/draft`'s output is still lost on reload exactly as before
+- [ ] Deferred, deliberately, this session: intake answers still don't become real `Message` rows (`messages.engagement_step_id` column exists but is unpopulated) — free-form chat still has no record of the interview, same gap as before the redesign
+- [ ] Frontend server-derives-journey was scoped OUT — `journey.ts::deriveJourney` is untouched (still a pure client-side derivation); bootstrap's `research_status`/`cases_status`/etc. were kept in the OLD wire shape specifically so this could stay untouched. A future session could push `engagement_steps` state further into the wire contract if that's ever wanted.
+- [ ] Stray untracked file `data_storage_plan.md` at repo root (37KB) appears to be an auto-rendered copy of this session's plan document — not intentionally created, left for the user to remove or keep
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ"
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena mode)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+## 2026-08-16 21:15 — main @ ebd9085
+
+**Summary:** `/w` was down — `Could not load your workspace`. Root cause: the prior session's DB redesign (migrations `0050`–`0058`) had only ever been verified against a fresh, empty scratch database; the persistent dev DB still had 8 client_profiles / 7 plans / 19 research_runs / 35 case_matches, and `0054` crashed the moment it hit that real data (`research_runs.key_version` was written but never created — invisible with zero rows, fatal with 19). Backed up the live DB, fixed `0054`, dry-ran the full chain against a restored copy, then migrated the live DB for real (`0049`→`0058`, all rows preserved, `/health` and clean backend restart confirmed). A follow-up audit of `0050`–`0058` against the ORM — this time diffing the now-migrated *live* schema instead of another empty scratch DB — found three more defects of the identical "invisible on empty, fatal/corrupting on real data" shape: `0057` dropped every legacy `case_matches` column except `file_id`, which the new ORM model no longer sets (would NOT-NULL-crash the very next case-match write); `0056`'s budget backfill hardcoded `needs_expert=false` regardless of whether a rate card matched (violated the model's own documented invariant on 10 live rows); and its money parser silently dropped comma-formatted amounts (NULLed 11 figures on one live plan version, including its ฿57,000 total). Fixed all three in the migration files, applied the equivalent DDL/UPDATE by hand to the live DB (since `0056`/`0057` had already run and won't re-apply), and verified the repairs (`case_matches` now has no `file_id` column; the 10 `needs_expert` rows and all 11 NULLed amounts read correctly, re-derived from the still-present `budget` JSONB). Committed everything — the DB redesign, the prior session's uncommitted Task 5.12, and this session's four migration fixes — as one commit (`ebd9085`); the repo had two commits total before this (`afd0b68`, `204b964`) despite several PROGRESS.md sessions of work sitting uncommitted on `main`.
+
+**Files changed:**
+- `backend/alembic/versions/0054_research_normalized.py` — added the missing `research_runs.key_version INTEGER NOT NULL DEFAULT 1` column (`ADD COLUMN IF NOT EXISTS`, plus matching `DROP COLUMN` in `downgrade()`)
+- `backend/alembic/versions/0057_drop_legacy.py` — added `case_matches.file_id` to the columns dropped (redundant with the new `case_study_id → case_studies.file_id` path; verified 0 mismatches across all 35 live rows before dropping)
+- `backend/alembic/versions/0056_plan_head_split.py` — `_dec()` now strips thousands-separator commas before parsing; the budget-line insert now binds `needs_expert = (rc_id is None)` instead of a hardcoded `false`
+- Live `brandbiz-client-workspace-postgres-1` (not a file, but this session's real deliverable): migrated `0049`→`0058`; `ALTER TABLE case_matches DROP COLUMN file_id`; `UPDATE plan_budget_lines SET needs_expert = true WHERE rate_card_item_id IS NULL AND needs_expert = false` (10 rows); budget-line `amount` and `plan_versions.contingency_amount`/`total_amount` re-derived from the surviving `budget` JSONB for plan_version `8fdf4d3b-…` (10 lines + 2 version-level fields)
+- Everything from the prior two uncommitted sessions (DB redesign migrations `0050`-`0058`, `app/models/{engagement,intake}.py`, `app/services/engagement.py`, Task 5.12's plan-version-history frontend/backend work, etc. — see the two entries directly above this one) — committed for the first time this session, not otherwise modified
+- `pre0050.dump` — live DB backup, kept in the session scratchpad, not the repo
+
+**Verification:** Dry run of the fixed chain against a restored copy of the live DB (throwaway `pgvector/pgvector:pg16` container on the compose network, torn down after) reached `0058` cleanly with all 8 profiles/19 runs/35 matches accounted for. Live migration: `alembic_version = 0058_engagement_started_action`, backend container restarted twice with no traceback in logs, `GET /health` → `{"status":"ok","db":"ok",...}` both times. Schema-vs-ORM diff re-run after all fixes: `case_matches` columns now match `CaseMatch` exactly; `research_runs` matches `ResearchRun` exactly (including `key_version`). Data repairs spot-checked directly (`\d`, `SELECT` before/after). **Not done:** no live browser click-through of `/w` — minting a test session token (even via the repo's own dev-token pattern) was blocked by the permission classifier as an auth-bypass-shaped action, so this needs the user (or someone with real credentials) to confirm `/w` renders end-to-end at `localhost:3100`.
+
+**Next steps:**
+- [x] Real persistent dev DB migrated `0044`→`0058` — done this session (previous entry only reached a fresh scratch container)
+- [ ] Live browser click-through of `/w` and the funnel — still not done; blocked on getting a real login session, see Verification
+- [ ] New, from this session's audit, not fixed (user chose not to this session): `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint even though `app/models/plan.py` and `services/plan.py::get_version()` assume one exists — two concurrent `revise_plan()` calls could race to the same `version_no` and later 500 on `MultipleResultsFound`. No duplicates exist today; safe to add without a data fix.
+- [ ] New, not fixed (cosmetic, user chose not to this session): missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; `plan_versions.budget`/`provenance` JSONB columns never dropped after `0056` exploded them into rows (still non-NULL on all 12/4 rows respectively — dead weight, not a bug); 3 index names (`research_findings`/`research_citations`/`case_matches`) don't match the ORM's implicit naming convention, so `alembic revision --autogenerate` will perpetually propose renaming them
+- [ ] New, not fixed: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for a `research_run`/`case_match` that can't resolve to an engagement — doesn't affect this dataset (0 orphans, confirmed), but if it ever happens the upgrade hard-fails on `0057`'s `SET NOT NULL` with a generic Postgres error instead of naming the orphaned row, and `0057` has no working downgrade
+- [ ] New: this and the prior two sessions' PROGRESS.md entries claimed "schema matches ORM exactly" based only on fresh-scratch-DB testing — that method is now demonstrated to miss real bugs (4 found this session alone); future migration verification for this repo should include a real-data dry run, not just a fresh chain
+- [x] `data_storage_plan.md` — still untracked at repo root, deliberately left out of the commit; still unresolved whether the user wants it kept or deleted
+- [ ] Carried: no live browser click-through of the redesigned funnel — click through: fresh intake → edit a field → market scan → case match (incl. a zero-result workspace) → draft → save → revise (v2) → switcher → `POST /client/engagements` for a second brief on the same seat
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows (`messages.engagement_step_id` unpopulated)
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation, scoped out of the redesign
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ"
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena mode)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+## 2026-08-16 22:07 — main @ ebd9085
+
+**Summary:** User asked why `/client/cases` showed "No case studies matched closely enough to show." — an ad hoc diagnostic, not a numbered PLAN.md task. Confirmed the RAG corpus itself is healthy (30/30 case-study files embedded and agent-attached, hand-run cosine search returns sane neighbours well under `rag_max_distance=0.6`); the real cause is that `LLM_EMBED_URL=http://192.168.20.18:12341` (the BGE-M3/Ollama box) is unreachable from this machine (its only routable IP is a `172.20.10.11/28` hotspot range, not the `192.168.20.0/24` LAN) — `EmbeddingClient.ping()` returns `False`, confirmed by both a TCP probe and the container's own startup log (`Local model unreachable`). That's an environmental fix (reconnect to the LAN/VPN), not a code bug — but it exposed a real one: `rag_search.retrieve()`'s default `strict=False` swallowed the `EmbeddingError` into `[]`, `case_match.match_cases()` inherited that default, the run was persisted `status="done", match_count=0`, and the engagement step was marked `done` regardless — so an outage was indistinguishable from a genuine "the library has nothing relevant" result. Fixed by making `run_case_match()` (`POST /client/cases`) call `match_cases(..., strict=True)` and catch `EmbeddingError` explicitly, mirroring the existing `run_research()` precedent exactly (run row → `status="failed"` + `error_detail`, step → `mark_step(..., "failed", error_code="embed_unreachable")`, `HTTPException(502, "Case matching is temporarily unavailable")`). No frontend change was needed — `ClientWorkspace.tsx`'s `!res.ok` handling and `CaseMatchCards.tsx`'s `status==='error'` branch already existed and just weren't reachable before. `strict=False` stays the default for every other caller (chat's RAG context), which must keep degrading gracefully rather than erroring.
+
+**Files changed:**
+- `backend/app/routers/client.py` — `run_case_match()`: builds the query string once and creates the `CaseMatchExecution` row *before* calling `match_cases()` (was: only after success) so a failure path has a row to update; passes `query=...`/`strict=True` into `match_cases()`; new `except EmbeddingError` branch (`run.status="failed"`, `mark_step(step3, "failed", error_code="embed_unreachable", ...)`, raises `HTTPException(502, ...)`); new `from app.llm.embeddings import EmbeddingError` import
+- `backend/tests/unit/test_rag_search.py` — new `TestRetrieveStrictEmbedFailure` class: `strict=True` re-raises `EmbeddingError` on an embed outage, `strict=False` still degrades to `[]` (regression guard so the two behaviors can't silently converge)
+- `backend/tests/unit/test_case_match_strict.py` — new; same guard one layer up at `case_match_svc.match_cases()`, asserting the outage is caught before any DB round trip (`session.execute.assert_not_called()`) and that the `strict=False` default (chat's path) is unaffected
+
+**Verification:** `docker exec` into the live `brandbiz-client-workspace-postgres-1`/`-backend-api-1` containers (read-only) confirmed the corpus health claims above directly against real data — not inferred. New + existing unit tests (`test_rag_search.py`, `test_case_match_strict.py`, `test_case_match_service.py`, `test_client_router_save_plan.py`): 21/21 passed. Full `pytest tests/unit`: 785 passed, 14 failed — all 14 in files this session didn't touch (`test_alert.py`, `test_audit.py`, `test_consent.py`, `test_crypto.py`, `test_google_llm.py`), same pre-existing `ENCRYPTION_KEY`/SDK-stub profile documented in every prior entry back to Task 5.9. Rebuilt and restarted `backend-api` only (frontend had no changes) — `docker compose build backend-api && docker compose up -d backend-api`, came up healthy, its own startup log still shows the LAN embed server unreachable (expected — the environmental cause wasn't touched). Live-probed the real fix end-to-end: minted a JWT for a seat with `interview` already `done`, called `POST /client/cases` twice — both times got `502 {"detail":"Case matching is temporarily unavailable"}` instead of a silent `200 {"matches":[]}`; confirmed in Postgres both `case_match_runs` rows landed `status='failed'` with the embed error text, and the `cases` `engagement_steps` row landed `status='failed', error_code='embed_unreachable'` — distinct from the pre-existing `done, match_count=5` rows from when the LAN was reachable. Separately confirmed chat's RAG path is unaffected: called `rag_search.retrieve()` directly with the default (`strict=False`) against the same live outage and got `[]` back with only a warning logged, not an exception.
+
+**Next steps:**
+- [ ] New: the actual unblock is environmental, not code — reconnect this machine to the `192.168.20.0/24` LAN (or its VPN) so `LLM_EMBED_URL` is reachable again; nothing needs re-seeding once that's done
+- [ ] New, noted not fixed: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest` — not today's cause (host is unreachable, not rejecting a model) but would produce an identical silent-empty-result symptom; worth reconciling once back on-LAN
+- [ ] New, noted not fixed: `.env` contains a live-looking `sk-proj-…` OpenAI key in the working tree (unused for embeddings — Ollama/BGE-M3 only); verify it's gitignored and consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel — click through: fresh intake → edit a field → market scan → case match (incl. a zero-result workspace, now distinguishable from an embed outage) → draft → save → revise (v2) → switcher → `POST /client/engagements` for a second brief on the same seat
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows (`messages.engagement_step_id` unpopulated)
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation, scoped out of the redesign
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ"
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena mode)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+- [ ] Carried: `data_storage_plan.md` still untracked at repo root — unresolved whether the user wants it kept or deleted
+- [ ] Carried: `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint (race-safe today, not enforced)
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs. ORM autogenerate
+- [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for an unresolvable `research_run`/`case_match`
+
+## 2026-08-17 02:17 — main @ ebd9085
+
+**Summary:** User asked why the external market scan comes back in English and why the company profile can't be edited — two ad hoc diagnostics, not numbered PLAN.md tasks. **Market scan:** `_RESEARCH_SYSTEM_PROMPT` does say "Write your entire answer in Thai", but it was the only Thai token in the whole request — the user turn was English prose plus `build_context_query()`'s English `FIELD_LABELS` joined to English `IntakeOption.value` chip values, so Sonar web-searched English sources and mirrored them. Fixed by moving the directive into the user turn as well and rendering the business context from `THAI_FIELD_LABELS` + the Thai chip *labels* the client actually clicked (new `_load_fields_th()`, which resolves `IntakeOption.label` instead of `.value`) — the same shape `plan.py::_build_drafting_prompt` uses, the one prompt here that reliably produced Thai. `case_match.build_context_query()` was deliberately left English: it feeds the bge-m3 embedding query, and changing it would move every match score shown to a client (that A/B is what `app/eval/query_variants.py` exists for). **Profile edit:** nothing is structurally locked — the endpoint, BFF route, UI and DB rows are all healthy (8 active engagements, script linked, `progress_current = 8/8`). The defect is that every rejection was swallowed to `console.error` while `WorkPanel.saveEdit()` cleared the pending chips and closed edit mode *unconditionally*, which is pixel-identical to a dead button; a 1-edit-per-60s limiter that ran *before* validation (so a rejected attempt burned the slot and silently 429'd the retry) and a frontend editability rule (`!!fields[key]`) that disagreed with the backend's (`idx < progress_current`) made hitting that path likely. Corroboration: `intake_answers` held 56 rows, all `source='chip'`, **zero superseded** — not one edit had ever landed since the redesign.
+
+**Files changed:**
+- `backend/app/routers/client.py` — new `_load_fields_th()` (chip answers resolve through `IntakeOption.label`) and `_build_research_query()` (pure, Thai user turn carrying the language directive); `run_research` now uses both; `edit_intake_fields` split into a validate-everything-first pass then a write pass, with `rate_limit_svc.check` moved after validation and raised to 5/60s so a rejected or no-op request can't spend the caller's slot
+- `backend/app/services/client_intake.py` — `THAI_FIELD_LABELS` promoted next to `FIELD_LABELS` (the split is English-vs-Thai, not prod-vs-eval)
+- `backend/app/eval/goldens.py` — imports `THAI_FIELD_LABELS` instead of keeping its own copy, so the labeling sheet and the market-scan prompt can't drift
+- `frontend-chat/components/client/ClientWorkspace.tsx` — new `profileError` state; `handleSaveProfile` returns `Promise<boolean>` and sets a message on 4xx/5xx/network instead of `console.error` only; the research→cases→plan regeneration cascade is no longer awaited (it pinned the Save button on "Saving…" through a full Perplexity + RAG + draft round-trip); `setStep` from the PATCH response
+- `frontend-chat/components/client/WorkPanel.tsx` — `saveEdit()` keeps `pending` and edit mode open when the save is rejected; renders `profileError` (same minimal treatment as `PlanDraftCard`'s `saveError`); editability now gates on the server's own `idx < intakeStep` instead of re-deriving `!!fields[key]`
+- `backend/tests/unit/test_research_prompt.py` — new; the Thai-directive guard the research path never had (`test_engagement_funnel.py:25` explicitly skips `/client/research`)
+- `backend/tests/unit/test_client_router_intake_edit.py` — new; restores the unit coverage the redesign commit deleted (both 400 gates, the no-op path, and that neither spends a rate-limit slot)
+- `backend/tests/integration/test_engagement_funnel.py` — dropped the manual rate-limit bucket clear and replaced it with an assertion that the rejected call didn't consume the slot, so the check moving back ahead of validation would fail the test
+
+**Verification:** `pytest tests/unit`: 788 passed, 16 failed — the same 16 confirmed pre-existing via `git stash` on unmodified `HEAD` (`test_audit.py`, `test_consent.py`, `test_crypto.py`, `test_google_llm.py`, `test_vault_connection.py`; note the standing "14 pre-existing" figure in earlier entries is stale — it's 16, `test_vault_connection.py`'s 3 were never listed and `test_alert.py` no longer fails). `npx tsc --noEmit` clean repo-wide. Rebuilt and restarted both `backend-api` and `frontend-chat` (no source mount, neither hot-reloads); `/health` → `{"status":"ok","db":"ok","llm":"ok"}`. Live-probed both fixes inside the running container against the real dev DB: `_build_research_query(_load_fields_th(...))` renders fully in Thai (`ธุรกิจ: ธุรกิจบริการ / B2B; ระยะ: โตแล้ว กำลังอยากขยาย; …`) while `build_context_query()` still emits the unchanged English embedding string; a real Perplexity call with the new prompt **came back in Thai**, with brand names (`LEARN Corporation`), English metric terms and `[n]` markers preserved exactly as instructed. Also exercised `edit_intake_fields` end-to-end against a live seat: an unknown-field edit 400'd *without* spending the rate-limit slot, then a real edit committed and produced the first-ever `source='edit'` row (original `chip` row superseded, new row live — confirmed in Postgres); the seat's `industry` was then restored to its original `Services / B2B` (append-only, so both edits remain in history). **Not done:** no browser click-through — minting a session token is still blocked, so the two *visual* behaviours (the error banner rendering, and edit mode staying open with the chips intact after a rejection) are unverified in a real browser; the logic behind them is unit-tested.
+
+**Next steps:**
+- [ ] New: browser click-through of the Profile tab's failure path — confirm the error message renders and the pending chips survive a rejected save. Needs a real login session (same standing blocker as every prior entry)
+- [ ] New: the Thai/English asymmetry is now *deliberate and documented in code* (Thai prompt, English embedding query) but still unmeasured — running `app/eval/query_variants.py`'s `thai_labels`/`natural_th` against the corpus is the outstanding question of whether case-match scores would improve too. Blocked on the embed host below
+- [ ] Carried: the actual case-match unblock is environmental — reconnect this machine to the `192.168.20.0/24` LAN (or its VPN) so `LLM_EMBED_URL` is reachable; the post-edit regeneration cascade will keep ending with the Cases card in a 502 until then
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key in the working tree; verify it's gitignored and consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel — fresh intake → edit a field → market scan → case match (incl. a zero-result workspace) → draft → save → revise (v2) → switcher → `POST /client/engagements` for a second brief on the same seat
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows (`messages.engagement_step_id` unpopulated)
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation, scoped out of the redesign
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ"
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena mode)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: `docs/gap-closure.md`'s G-I1 Thai/English switch is still not built — `layout.tsx:39` hardcodes `lang="th"`, no i18n layer; today's fix asserts Thai per-prompt rather than making language configurable
+- [ ] Carried: `data_storage_plan.md` still untracked at repo root — unresolved whether the user wants it kept or deleted
+- [ ] Carried: `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint (race-safe today, not enforced)
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs. ORM autogenerate
+- [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for an unresolvable `research_run`/`case_match`
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+## 2026-08-17 03:28 — main @ ebd9085
+
+**Summary:** Made the client workspace's free-form chat aware of the plan the client is looking at. A saved plan is an artifact *outside* the message thread (`app/models/plan.py`), so a follow-up like "ทำไมงบเฟส 2 ถึงเท่านี้" reached an agent that had never seen it — the only trace in the conversation was `draft_plan()`'s own prompt plus the raw JSON reply, i.e. the *draft*, not whatever was saved or revised afterwards, and the first thing to fall out of the history window. `POST /client/chat` now rebuilds the plan's **current version** into a system-context block on every turn, injected through `prepare_chat(extra_context=...)` so it joins the §7.6 classification payload and is gated by `PolicyEngine` exactly like RAG context — never stapled on after `prepare_chat()` returns. Also fixed the history window, which was `ORDER BY created_at LIMIT 20` — the **first** 20 messages, so past message 20 a conversation stopped moving and every turn re-sent the same opening exchange; it now takes the last 20, still oldest-first.
+
+**Files changed:**
+- `backend/app/services/plan.py` — new "Plan -> chat context" section: `build_plan_context()` (pure renderer — title/version, core idea, analogous case, phases, every budget line with its stored qty/unit price/amount, needs-expert lines marked unpriced, totals, case/research provenance, plus the instruction not to invent, re-price or re-scope, since prices come from `rate_card.price()` and never from the model), `plan_context_for_plan()` (loads the current version and renders it), and `get_active_plan()` (non-raising lookup for `engagements.active_plan_id`)
+- `backend/app/services/chat_policy.py` — `prepare_chat(extra_context="")`: folded into the agent system prompt *and* into `payload_parts` before `detect_tier()`, so injected client data can raise the tier; `load_history_messages()` now windows the tail of the conversation (`ORDER BY created_at DESC LIMIT _HISTORY_LIMIT`, reversed) instead of the head
+- `backend/app/routers/client.py` — `ClientChatIn.plan_id` (optional); new `_plan_chat_context()` resolves it — an explicit `plan_id` goes through `plan_svc.get_plan` (404s another seat's plan, same check as `GET /client/plans/{id}`), no `plan_id` falls back to the engagement's active plan through the non-raising lookup so a dangling `active_plan_id` degrades to an ordinary chat turn instead of making the seat unable to chat; `client_chat` passes the block as `extra_context`
+- `frontend-chat/components/client/ClientWorkspace.tsx` — `sendChat` sends `plan_id: activePlanId`, so the answer is about the plan on screen rather than whatever the plan switcher's fire-and-forget `POST …/activate` last managed to persist
+- `backend/tests/unit/test_plan_chat_context.py` — new; the block carries identity + every stored figure verbatim, marks unpriced lines, forbids re-pricing/re-scoping, renders no `Budget` heading for an unpriced plan, drops empty sections
+- `backend/tests/unit/test_client_chat_plan_context.py` — new; the resolution rules as access-control (explicit id ownership-checked, 404 propagates, fallback to active plan, no plan → no block, dangling id doesn't break chat)
+- `backend/tests/unit/test_chat_policy_context.py` — new; `extra_context` reaches `system_prompt`, **and** a TIER_3 plan block downgrades the turn to local (the proof it isn't routed around `PolicyEngine`); history window keeps the last N in order
+
+**Verification:** `pytest tests/unit`: 808 passed, 16 failed — the same 16 pre-existing failures the previous entry pins down (`test_audit.py`, `test_consent.py`, `test_crypto.py`, `test_google_llm.py`, `test_vault_connection.py`). `npx tsc --noEmit` clean. Eyeballed a rendered block end to end (Thai title/phases intact, `WS-01 — Positioning workshop [Strategy] (qty 1, flat @ 80000.00) = 80000.00`, `TVC-01 … needs an expert quote, no price yet`, `Subtotal … · contingency … · total …`). **Not done:** no live chat turn against a real model — the running `backend-api` image has no source mount, so this needs a rebuild before it's exercisable in the browser; the plan document page (`/w/plans/[id]`) still has no chat surface of its own, though the `plan_id` parameter is there for one. *(Note: `uv sync --frozen` early in the session dropped the `[external]` extras from `backend/.venv`; restored with `uv sync --frozen --extra external`.)*
+
+**Next steps:**
+- [ ] New: rebuild `backend-api` + `frontend-chat` and take one live chat turn against a seat that has a saved plan — confirm the agent quotes the stored figures and refuses to re-price
+- [ ] New: decide whether `/w/plans/[id]` gets its own chat box (the backend already accepts `plan_id` for exactly that)
+- [ ] New: the injected block covers the plan only — intake answers, the market scan and the matched cases are still invisible to a chat turn unless they happen to be inside the 20-message window
+- [ ] Carried: browser click-through of the Profile tab's failure path — needs a real login session (standing blocker)
+- [ ] Carried: `app/eval/query_variants.py`'s `thai_labels`/`natural_th` run against the corpus, blocked on the embed host below
+- [ ] Carried: the case-match unblock is environmental — reconnect to the `192.168.20.0/24` LAN (or its VPN) so `LLM_EMBED_URL` is reachable
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key in the working tree; verify it's gitignored and consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel (fresh intake → edit → market scan → case match → draft → save → revise → switcher → second brief)
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows (`messages.engagement_step_id` unpopulated)
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ"
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena mode)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: `docs/gap-closure.md`'s G-I1 Thai/English switch is still not built
+- [ ] Carried: `data_storage_plan.md` still untracked at repo root — unresolved whether the user wants it kept or deleted
+- [ ] Carried: `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs. ORM autogenerate
+- [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for an unresolvable `research_run`/`case_match`
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+## 2026-08-21 16:13 — case-study-corpus-refresh @ 731c8ca
+
+**Summary:** Implemented `Interview_Details.xlsx` as intake script **v2** and made its `Matching Tag` / `Weight` columns real. Those two columns described a scoring model the codebase did not have: matching was one dense-vector cosine over a single string built from every answer (`case_match.build_context_query`), no per-field weight existed anywhere in `backend/`, and case studies carried no tags to match against (`case_card.py` parses only title/client/category/source/summary/image). v2 replaces `history` with `asset_channel`, renames `goal`→`objective` and `horizon`→`timeframe`, and widens every option list; the six scoring weights (0.25/0.05/0.10/0.25/0.15/0.20) now live on `intake_questions` per script version and drive a new weighted scorer that blends with the old cosine score via `alpha` — `alpha = 0` reproduces the previous ranking exactly.
+
+**Files changed:**
+- `backend/app/services/client_intake.py` — `INTAKE_SCRIPT` rewritten as v2 (8 questions, English `value` + controlled-vocab `tag` per option, authored `insight` per step, `match_tag`/`weight`/`use_mode`/`dev_note` per question); `IntakeOption`/`IntakeStep` extended; `FIELD_LABELS`/`THAI_FIELD_LABELS` made a **union** of v1+v2 keys so v1 engagements still render; new `SCORING_WEIGHTS`; docstring corrected (the stale "Skip" affordance, and INTAKE_SCRIPT now means *the current script*)
+- `backend/alembic/versions/0052_intake_catalog.py` — **v1 literal frozen inline** as `_V1_SCRIPT`, live import of `client_intake.INTAKE_SCRIPT` deleted. Without this a fresh `alembic upgrade head` would seed v2 content under `version = 1`
+- `backend/alembic/versions/0059_intake_weights.py` — new; `intake_questions.match_tag/weight/use_mode/dev_note` + `intake_options.tag_value`, with CHECKs tying weight to use_mode (the sheet's Weight column mixes numbers with the string "Feasibility"; that splits here) and a partial unique index on (question_id, tag_value)
+- `backend/alembic/versions/0060_intake_script_v2.py` — new; publishes v2, deactivates v1, asserts the weights sum to 1.000 before writing; leaves every existing `engagements.intake_script_id` alone; downgrade refuses to drop v2 while any engagement is pinned to it
+- `backend/alembic/versions/0061_case_study_tags.py` — new; `case_study_tags` (many-to-many per dimension, with `confidence`) + `case_matches.score_breakdown` JSONB
+- `backend/app/services/case_taxonomy.py` — new; controlled vocabulary **derived from** `INTAKE_SCRIPT` (so the intake side and the corpus side cannot drift), `tag_for_value()`, `validate_tag()`, and a symmetric `INDUSTRY_ADJACENCY` map
+- `backend/app/services/case_score.py` — new; pure `score_case()` → `CaseScore` with a per-dimension breakdown. exact = 1.0, adjacent industry = 0.5, free-text/untagged = that dimension's dense similarity damped to 0.4, miss = 0.0; unanswered dimensions are **dropped and renormalised** rather than scored zero; `final = alpha·tag + (1-alpha)·dense`
+- `backend/app/services/case_match.py` — `build_context_query()` no longer **drops** fields the current script lacks (a v1 engagement's `goal`/`horizon`/`history` were silently vanishing from its query — the one real breakage of the rename); new `tags_for_file_ids()`; `match_cases()` widens to a candidate pool with the cutoff disabled, rescores, filters by `case_match_min_score`, sorts by `(-score, filename)`, cuts to `case_match_top_n`
+- `backend/app/config.py` — `case_match_tag_weight` (0.7), `case_match_pool_chunks` (200), `case_match_min_score` (0.15), `case_match_top_n` (5)
+- `backend/app/models/intake.py`, `backend/app/models/client_intake.py`, `backend/app/models/__init__.py` — new columns mirrored; new `CaseStudyTag`
+- `backend/app/routers/client.py` — `_build_research_query()` had the same drop-unknown-keys bug, fixed the same way; `_breakdown_json()` persisted onto `CaseMatch`; `_DIMENSION_TH`; `matched_on` added to **both** the fresh-match and bootstrap-replay payloads so a reload does not lose the chips
+- `backend/app/eval/query_variants.py` — `natural_th` was a hand-written sentence hardcoding `goal`/`horizon`/`history`; now driven by `INTAKE_SCRIPT` order with a per-field phrase table
+- `backend/app/eval/corpus.py` — `load_case_tags()` (validates every token on read), `write_case_tags()`, `tag_coverage()`
+- `backend/scripts/tag_case_studies.py` — new; `--industry` derives industry tags from the manifest's `category` by an explicit inspectable rule table (offline, no model, confidence 1.00), `--narrative` dumps cases for human review, `--coverage` reports the gap
+- `backend/scripts/seed_case_tags.py` — new; loads the **reviewed** CSV into the DB, idempotent (insert/update/delete), refuses filenames absent from the corpus
+- `backend/eval/case_match/case_tags.csv` — new; 31 rule-derived industry tags across all 26 live cases
+- `backend/eval/case_match/profiles.json` — regenerated for v2 (14 → 18 personas: one per industry chip, six single-field contrasts off a spine, three free-text)
+- `backend/tests/unit/test_case_score.py`, `test_case_tags_corpus.py` — new (35 + 17 tests)
+- `backend/tests/unit/test_client_intake.py`, `test_case_match_service.py`, `test_eval_goldens.py`, `test_eval_query_variants.py`, `test_research_prompt.py` — v1-transcribed fixtures replaced with **script-derived** ones (they went stale the moment v2 renamed a field, and a hand-written copy would go stale again on v3); new guards for ≤9 options, no duplicate "อื่นๆ" option, weights summing to 1.0, and v1 fields surviving `build_context_query`
+- `frontend-chat/components/client/types.ts`, `CaseMatchCards.tsx` — `matched_on?: string[]`; a "ตรงกับ …" chip row on each card
+
+**Verification:** `pytest tests/` → **962 passed, 21 failed**; every failure is in `test_audit.py`/`test_crypto.py`/`test_google_llm.py`/`test_consent.py` (missing env secrets, audit broker) or an integration test hitting `ConnectionRefusedError` because postgres has no host port mapping — **zero failures in any file touched here**. `npx tsc --noEmit` clean. Migrations exercised on a from-zero database: full `upgrade head`, `downgrade 0058` (clean — v2 gone, v1 reactivated, tables/columns dropped), re-upgrade, and the downgrade guard confirmed raising against an engagement pinned to v2. Verified v1 seeds its **original** frozen content (still "เคยทำงาน branding") while v2 carries all weights and 57 tagged options. Backend + frontend images rebuilt; the live API now serves the v2 script (`asset_channel` at Q5, 9 industry chips) and all **49 existing engagements remain pinned to v1**. Scored real corpus tags end to end: beauty cases 0.430, adjacent health-supplement 0.343. **Note:** `docker compose cp` into the running container triggered `app/main.py:64`'s startup `alembic upgrade head`, which migrated the **dev** database (not the intended scratch DB — `-e POSTGRES_DB` does not override the baked env file); the dev stack was then rebuilt properly so code and schema agree at `0061`.
+
+**Not done:** the five judgement dimensions (`stage`, `audience`, `challenge`, `asset_channel`, `objective`) are **untagged** — 130 of 156 (case, dimension) pairs. Only `industry` ships, because it is the one dimension derivable by rule from the committed manifest; the rest are a reading task over each case's Thai narrative and must not be invented by a model. Until they are tagged the weighted scorer leans on the damped-dense fallback for 0.75 of the weight, so the ranking today is better than pure cosine but far short of what the sheet describes. No live browser click-through of the v2 interview, and no eval accuracy delta (still no `labels.csv`).
+
+**Next steps:**
+- [ ] New: tag the five judgement dimensions — `python scripts/tag_case_studies.py --narrative` dumps the review material, then `--coverage` to track the gap and `seed_case_tags.py --apply` to ship
+- [ ] New: confirm the Q4-Challenge / Q6-Objective overlap is wanted — 6 of 9 options map ~1:1 and they carry 0.45 of the score between them (kept as-is by explicit decision; the weights are DB-side so a retune needs no deploy)
+- [ ] New: review the two low-confidence (0.60) secondary industry tags — GrabFood→`food_beverage`, iStudio→`tech_app`; and decide whether GrabMart should be `retail_fmcg` (the category string only says "APPLICATION")
+- [ ] New: sweep `case_match_tag_weight` in the eval harness once labels exist — `alpha = 0` is the baseline, 0.7 the default
+- [ ] New: browser click-through of the v2 interview end to end (fresh engagement → 8 questions → Profile 8/8 → Cases tab chips)
+- [ ] Carried: rebuild + one live chat turn against a seat with a saved plan (backend/frontend were rebuilt this session, so this is now unblocked)
+- [ ] Carried: decide whether `/w/plans/[id]` gets its own chat box
+- [ ] Carried: chat context covers the plan only — intake, market scan and matched cases are still invisible outside the 20-message window
+- [ ] Carried: browser click-through of the Profile tab's failure path — needs a real login session (standing blocker)
+- [ ] Carried: the case-match embed host is unreachable — reconnect to `192.168.20.0/24` (or its VPN) so `LLM_EMBED_URL` resolves; blocks any real retrieval run
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key in the working tree; verify it's gitignored and consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows (`messages.engagement_step_id` unpopulated)
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: `RedeemInvite.tsx`'s pre-redeem loading screen still hardcodes "น้องภูมิ"
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena mode)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: `docs/gap-closure.md`'s G-I1 Thai/English switch is still not built
+- [ ] Carried: `data_storage_plan.md` still untracked at repo root — unresolved whether the user wants it kept or deleted
+- [ ] Carried: `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs. ORM autogenerate
+- [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for an unresolvable `research_run`/`case_match`
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card; prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+
+## 2026-08-24 14:39 — case-study-corpus-refresh @ 3c1771b
+
+**Summary:** Replaced the single-use `/try/<token>` invite link with LINE Login as the client
+entry point (new decision **D24**, PLAN.md Task 5.13). "One client, one run" moves from the
+*link* to the *identity*: `users.line_user_id` carries the verified `sub` from a LIFF
+`id_token` under a partial UNIQUE index, a returning LINE user resumes the SAME seat, and the
+single-run rule is enforced one level up at `POST /client/engagements`. Each LINE identity is
+auto-provisioned its own workspace, so the pooled `token_budget_limit` is per person. The
+invite path (`/public/redeem`, `client_invites`) is deliberately kept as break-glass.
+
+**Files changed:**
+- `backend/alembic/versions/0063_line_login.py` — new; `users.line_user_id VARCHAR(64)`, partial
+  `uq_users_line_user_id` (UNIQUE WHERE NOT NULL, so staff and invite-era seats stay
+  unconstrained), and `audit_action` gains `client_line_login`
+- `backend/app/models/user.py` — `line_user_id` column + the same partial unique index declared in
+  `__table_args__`. Required, not redundant: `tests/integration/conftest.py` builds schema from
+  `Base.metadata.create_all`, not from migrations, so a migration-only index is invisible to the
+  harness and the invariant would go untested
+- `backend/app/models/audit.py` — `client_line_login` added to the ORM label list
+- `backend/app/services/line_auth.py` — new; verifies the `id_token` against LINE's
+  `/oauth2/v2.1/verify` (LINE signs HS256 or ES256 depending on channel config; delegating means
+  never tracking that or its key rotation). `sub` is the only field treated as identity;
+  `name`/`picture` are user-controlled display data. Distinguishes 401 (their token) from 502
+  (LINE unreachable) and never echoes LINE's `error_description`, which would be a probe oracle
+- `backend/app/services/workspace.py` — `provision_line_seat` / `_refresh_line_seat` /
+  `_create_line_seat` / `get_seat_by_line_user_id` / `_line_workspace_slug`. Idempotent by design
+  — the exact opposite of `redeem_invite`, which must not be — and adopts the winner on
+  `IntegrityError` when two logins race. Refuses a deactivated seat (403)
+- `backend/app/services/engagement.py` — `start_new` now 409s when the seat already has any
+  engagement, behind `settings.client_single_engagement`
+- `backend/app/routers/client_public.py` — `POST /public/line/login`; loose per-IP limit (D23's
+  shared-NAT reasoning) plus a real per-`sub` limit applied only after LINE has verified the token
+- `backend/app/config.py` — `line_login_channel_id/secret`, `line_liff_id`, `line_verify_url`,
+  `client_single_engagement`
+- `frontend-chat/app/try/page.tsx`, `components/client/LineLogin.tsx` — new; LIFF entry. LIFF ID
+  read server-side and passed as a prop (`NEXT_PUBLIC_*` is inlined at build time and would not
+  reach the browser from a compose `environment:` block)
+- `frontend-chat/app/api/public/line/login/route.ts` — new; BFF proxy, same shape as `redeem`
+- `frontend-chat/middleware.ts` — `pathname === '/try'` arm; `startsWith('/try/')` does not match
+  the bare path, so the new page would have bounced to `/login`
+- `backend/tests/unit/test_line_auth.py` — new; 8 tests, all passing
+- `backend/tests/integration/test_line_login.py` — new; 8 tests (not yet executed, see below)
+- `backend/tests/integration/conftest.py` — hand-rolled `audit_action` enum gains the new label,
+  or `test_audit_enum_sync` fails
+- `backend/tests/integration/test_engagement_funnel.py` — the second-engagement assertion now
+  turns `client_single_engagement` off explicitly; the multi-brief path still exists behind the flag
+- `PLAN.md` — decision **D24**; task **5.13**
+- `.env.example`, `docker-compose.yml` — `LINE_LOGIN_CHANNEL_ID/SECRET`, `LINE_LIFF_ID`,
+  `CLIENT_SINGLE_ENGAGEMENT` wired to both services (the containers have no `.env` file)
+
+**Verification:** unit suite **1016 passed / 13 failed**; the 13 are byte-identical to the
+pre-change baseline, verified by `git stash`-ing the whole change set and re-running (1008 passed
+/ same 13 — the usual `ENCRYPTION_KEY`/SDK host gaps). Frontend `tsc --noEmit` clean. App imports
+clean and all three `/public/*` routes register.
+
+**Not verified:** the 8 new integration tests and the amended funnel test — Docker is unavailable
+on this host, so the pytest-docker Postgres harness cannot start. They collect cleanly (15 tests)
+but have never executed, which means the UNIQUE-index race behaviour, the 403/409 paths and the
+consent assertions are all unproven against a real database. Migration `0063` has never been run.
+No LINE channel exists yet, so `/public/line/login` returns 503 and nothing has been exercised end
+to end; LIFF additionally requires public HTTPS, so this cannot be tested against `localhost:3100`
+at all.
+
+**Divergences from `line_plan.md`** (untracked pre-existing design doc, found only after
+implementing — worth reconciling before this is committed): it specifies one **shared** workspace
+resolved by slug, I auto-provision one per LINE user (per the user's answer this session, and the
+doc itself flags the shared-workspace blast radius); it recommends keeping
+`consent_acknowledged_at` auto-set, I require an explicit tick and 403 without it; it specifies the
+`@line/liff` **npm package** over the CDN script (for type-checking and `output: 'standalone'`), I
+used the CDN script; and it names things differently throughout — `/line` vs my `/try`,
+`POST /public/line-login` vs `/public/line/login`, `line_identity.py` vs `line_auth.py`,
+`line_login` vs `client_line_login`, migration `0059` (stale — 0059-0062 are taken) vs `0063`. It
+also specifies a deterministic synthetic `google_email` derived from the sub; I used a random
+uuid4, relying on the unique index rather than determinism for retry-safety.
+
+**Next steps:**
+- [ ] New: reconcile with `line_plan.md` before committing — decide shared vs per-user workspace,
+      auto-consent vs explicit tick, CDN vs `@line/liff`, and the route/service naming
+- [ ] New: run the integration suite on a host with Docker — 8 new tests plus the amended funnel
+      test have never executed
+- [ ] New: run `alembic upgrade head` (0063) against a real database; it has only been read, never applied
+- [ ] New: create the LINE Login / MINI App channel + LIFF app and set `LINE_LOGIN_CHANNEL_ID`,
+      `LINE_LOGIN_CHANNEL_SECRET`, `LINE_LIFF_ID`; put the Login channel under the SAME provider as
+      any future Messaging API channel or the user ids will never reconcile
+- [ ] New: LIFF needs public HTTPS — stand up a tunnel to port 3100 for dev, and decide whether prod
+      is a dedicated host (`line_plan.md` Phase A)
+- [ ] New: `line_plan.md` Phase D (mobile/LIFF UI polish), Phase E (cookies/streaming/deploy) and
+      B6 (session-expiry recovery instead of dead-ending at `/login`) are entirely unbuilt
+- [ ] New: decide what happens to the admin `/clients` invite UI now that invites are break-glass only
+- [ ] New: `line_plan.md` and `data_storage_plan.md` are both untracked at repo root — decide whether
+      to commit or delete
+- [ ] Carried: `RedeemInvite.tsx`'s hardcoded "น้องภูมิ" loading copy — now duplicated in `LineLogin.tsx`
+- [ ] Carried: tag the five judgement dimensions — `scripts/tag_case_studies.py --narrative`, then
+      `--coverage` and `seed_case_tags.py --apply`
+- [ ] Carried: confirm the Q4-Challenge / Q6-Objective overlap is wanted
+- [ ] Carried: review the two low-confidence (0.60) secondary industry tags; decide GrabMart's
+- [ ] Carried: sweep `case_match_tag_weight` in the eval harness once labels exist
+- [ ] Carried: browser click-through of the v2 interview end to end
+- [ ] Carried: rebuild + one live chat turn against a seat with a saved plan
+- [ ] Carried: decide whether `/w/plans/[id]` gets its own chat box
+- [ ] Carried: chat context covers the plan only — intake, market scan and matched cases are still
+      invisible outside the 20-message window
+- [ ] Carried: browser click-through of the Profile tab's failure path — needs a real login session
+- [ ] Carried: the case-match embed host is unreachable — reconnect to `192.168.20.0/24` or its VPN
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key in the working tree; verify it's
+      gitignored and consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler wired up to run `backend/scripts/purge_expired_messages.py` daily
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: `docs/gap-closure.md`'s G-I1 Thai/English switch is still not built
+- [ ] Carried: `plan_versions` has no `UNIQUE(plan_id, version_no)` constraint
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead
+      `plan_versions.budget`/`provenance` JSONB columns; 3 index-naming mismatches vs ORM autogenerate
+- [ ] Carried: `0051`/`0054`/`0055`/`0057`'s engagement-linking backfills have no defensive check for
+      an unresolvable `research_run`/`case_match`
+- [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card;
+      prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading
+      confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)

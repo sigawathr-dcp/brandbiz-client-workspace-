@@ -14,7 +14,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import settings
 from app.context import request_ip, request_ua
 from app.db import engine, session_factory
-from app.deps import require_internal, require_staff, require_staff_principal
+from app.deps import (
+    require_client_surface,
+    require_internal,
+    require_staff,
+    require_staff_principal,
+)
 from app.llm.base import LLMProviderError
 from app.services.rate_limit import rate_limit
 from app.routers import (
@@ -155,15 +160,25 @@ app.include_router(skills_router.router, dependencies=_INTERNAL_ONLY)
 # Client Workspaces (Phase 5, D21/D22) — client_admin is require_admin-gated
 # internally (like admin.router); client_public is intentionally
 # unauthenticated (the invite-redemption entry point, mirrors auth.router).
-app.include_router(client_admin_router.router)
-app.include_router(client_public_router.router)
+#
+# All three carry the CLIENT_SURFACE_ENABLED kill switch here rather than in
+# each handler. It used to be 22 hand-written _require_enabled() calls and
+# three of them had been missed on the /admin/clients GET routes — see
+# app/deps.py::require_client_surface.
+_CLIENT_SURFACE = [Depends(require_client_surface)]
+app.include_router(client_admin_router.router, dependencies=_CLIENT_SURFACE)
+app.include_router(client_public_router.router, dependencies=_CLIENT_SURFACE)
 # Phase 7 hardening: a coarse per-IP cap across all /client/* calls, defense
 # in depth against one attendee's device hammering the booth's shared NAT
 # IP — on top of the per-seat token/workspace-budget caps PolicyEngine
-# already enforces for the LLM-calling endpoints specifically.
+# already enforces for the LLM-calling endpoints specifically. The kill
+# switch is listed first so a killed surface doesn't burn rate-limit budget.
 app.include_router(
     client_router.router,
-    dependencies=[Depends(rate_limit("client_router", limit=120, window_seconds=60))],
+    dependencies=[
+        *_CLIENT_SURFACE,
+        Depends(rate_limit("client_router", limit=120, window_seconds=60)),
+    ],
 )
 app.include_router(admin_leads_router.router)
 

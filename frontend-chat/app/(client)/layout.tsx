@@ -39,7 +39,11 @@ export default async function ClientLayout({ children }: { children: React.React
 
   const user = await getUser(token)
   if (!user) {
-    redirect('/login')
+    // Token was present but the backend rejected it (expired/stale) —
+    // route through /api/session-expired to clear the cookie first, or
+    // middleware.ts (which only checks cookie presence) bounces straight
+    // back here forever. See that route's comment for the full loop.
+    redirect('/api/session-expired')
   }
 
   return <>{children}</>

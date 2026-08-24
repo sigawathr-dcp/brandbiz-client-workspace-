@@ -38,12 +38,21 @@ function CaseCard({ m, showDetail }: { m: CaseMatchItem; showDetail?: boolean })
     <div
       style={{
         display: 'flex',
-        alignItems: 'flex-start',
-        gap: 11,
+        // Media beside the text on a wide card, stacked above it once the
+        // card is narrow — the work panel is ~372px and drops to full-width
+        // drawer under 768px (.client-workpanel in globals.css), where a
+        // 132px media column would leave the copy unreadable.
+        flexWrap: 'wrap',
+        alignItems: 'stretch',
+        // No gap: the text block carries symmetric padding instead, so it
+        // reads correctly both side-by-side and stacked (a gap would leave
+        // the copy flush against the left edge once the row wraps).
+        gap: 0,
         border: '1px solid var(--line)',
         borderRadius: 11,
-        padding: '12px 13px',
+        padding: showImage ? 0 : '12px 13px',
         background: 'var(--surface)',
+        overflow: 'hidden',
       }}
     >
       {showImage && (
@@ -54,16 +63,27 @@ function CaseCard({ m, showDetail }: { m: CaseMatchItem; showDetail?: boolean })
           referrerPolicy="no-referrer"
           onError={() => setImgOk(false)}
           style={{
-            width: 64,
-            height: 64,
-            flexShrink: 0,
+            // flex-basis 132 with grow:1 = a fixed-ish media column that
+            // becomes a full-width banner when the row wraps.
+            flex: '1 1 132px',
+            maxWidth: 176,
+            minWidth: 132,
+            alignSelf: 'stretch',
+            minHeight: 108,
             objectFit: 'cover',
-            borderRadius: 8,
-            border: '1px solid var(--line)',
+            display: 'block',
           }}
         />
       )}
-      <div style={{ minWidth: 0, flex: 1 }}>
+      <div
+        style={{
+          minWidth: 0,
+          // Needs to be wider than the media before the row is allowed to sit
+          // side by side; below that the whole thing wraps to a stacked card.
+          flex: '999 1 200px',
+          padding: showImage ? '12px 13px' : undefined,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink)' }}>{heading}</div>
           {m.category && (
@@ -105,6 +125,36 @@ function CaseCard({ m, showDetail }: { m: CaseMatchItem; showDetail?: boolean })
             }}
           >
             {m.summary}
+          </div>
+        )}
+        {!!m.matched_on?.length && (
+          <div
+            style={{
+              marginTop: 8,
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 11.5,
+              color: 'var(--ink-3)',
+            }}
+          >
+            <span>ตรงกับ</span>
+            {m.matched_on.map((d) => (
+              <span
+                key={d}
+                style={{
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 99,
+                  padding: '1px 7px',
+                  color: 'var(--ink-2)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {d}
+              </span>
+            ))}
           </div>
         )}
         {m.source_url && (

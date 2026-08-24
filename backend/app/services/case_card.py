@@ -4,24 +4,48 @@ app/services/case_card.py
 Parse a case-study markdown document into the display fields the client
 Cases cards need (Phase 5, D21/D22).
 
-The case-study corpus (scraped from brandbizsolution.co.th, see the
-`case-study_*.md` files attached to the workspace agent) follows one
-template:
+The case-study corpus (the `case-study_*.md` files attached to the
+workspace agent) comes in two shapes that share one header block:
 
     # Case Study: <campaign title>
     - **Client:** <brand name>
     - **Category:** <vertical>
-    - **Source:** <works-page URL>
-    - **Video:** <embed URL>          (optional)
+    - **Source:** <works-page URL>          (absent on spreadsheet-only cases)
+    - **Video:** <embed URL>                (optional, repeatable)
+    - **Also published at:** <URL>          (optional — merged portfolio pages)
+    - **Reference:** <article URL>          (optional, not an image)
     - **Image:** <thumbnail URL>      (optional — falls back to the first
                                         `![alt](url)` in the doc, else no
-                                        image; cards degrade to text-only)
+                                        image; cards degrade to text-only.
+                                        No file in the corpus carries one
+                                        today: thumbnails are recovered
+                                        offline into case_studies.image_url
+                                        by scripts/backfill_case_images.py,
+                                        see services/case_image.py)
+
+Scraped from brandbizsolution.co.th — everything under one H2, with the
+section names as bold inline labels:
+
     ## What we did
     **OUR WORK :**
     - <service bullet>
-    ...
     **BRAND COMMUNICATION :**
     <free-text Thai narrative paragraph>
+
+Curated from "Data for DSMEs Agent.xlsx" — the same sections promoted to
+real H2s, with the leftover scraped detail kept below them:
+
+    ## Our work
+    - <service bullet>
+    ## Brand communication
+    <free-text Thai narrative paragraph>
+    ## Execution details (from portfolio site)
+    ### <scraped section name>
+    ...
+
+The narrative is found by prose shape, not by heading name, so both shapes
+yield the same summary; only _services_summary()'s fallback has to know
+that "## Our work" and "## What we did" mean the same thing.
 
 A client seat looking at a case card wants "have they done work like mine,
 for brands I recognise?" — the brand name, the kind of work, and a readable
@@ -54,6 +78,12 @@ _SUMMARY_MAX_CHARS = 220
 # markdown image lines (`![alt](url)`), which otherwise read as a long
 # prose line and would leak a raw URL into the card summary.
 _NON_PROSE_PREFIXES = ("#", "-", "*", "_", ">", "|", "`", "!")
+
+# Headings whose top-level bullets are the service list. The scraped corpus
+# nests "**OUR WORK :**" under "## What we did"; the spreadsheet-curated
+# corpus promotes it to its own "## Our work" H2. Both name the same thing,
+# so _services_summary() accepts either.
+_WORK_SECTION_HEADINGS = ("## what we did", "## our work")
 
 
 @dataclass
@@ -92,13 +122,13 @@ def _narrative_summary(text: str) -> str | None:
 
 def _services_summary(text: str) -> str | None:
     """Fallback when there is no narrative: the top-level service bullets
-    under "## What we did" (e.g. "Branding & Communication Campaigns"),
-    deduplicated, joined as one line."""
+    under "## What we did" / "## Our work" (e.g. "Branding & Communication
+    Campaigns"), deduplicated, joined as one line."""
     in_work_section = False
     services: list[str] = []
     for raw in text.splitlines():
         if raw.startswith("## "):
-            in_work_section = raw.strip().lower() == "## what we did"
+            in_work_section = raw.strip().lower() in _WORK_SECTION_HEADINGS
             continue
         # top-level bullets only — indented bullets are campaign sub-items
         if in_work_section and raw.startswith("- "):

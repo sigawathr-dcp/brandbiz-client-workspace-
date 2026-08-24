@@ -73,6 +73,7 @@ Every item here has been deliberated. Do not re-litigate without explicit user r
 | D22 | The gateway has two tenant classes: **internal** (`users.workspace_id IS NULL`, unchanged behavior) and **client** (`users.workspace_id` set). A single `workspace_visibility_filter` helper gates `files`, `skills`, and `agents` visibility; `require_internal` gates all existing internal routers at `include_router` level. This is deliberately *not* full multi-tenancy — internal users still share one pool exactly as before. | Cheapest correct fix for the tenant-leak risk introduced by D21, without rewriting every scoping predicate in the codebase. Supersedes "Multi-tenancy (single company only)" in §11 — see the amended entry there. |
 | | **Amended by D23:** `require_internal` is now flag-gated (admits client seats when `CLIENT_INTERNAL_ACCESS_ENABLED` is on, default off), and `workspace_visibility_filter` is now asymmetric — the shared internal pool (`workspace_id IS NULL`) is readable by all tenants when the flag is on, while a workspace's own rows stay readable only in-workspace. The two-mechanism design itself is unchanged; only what each mechanism decides has changed. `require_client` is removed (it never had a call site — `require_client_context` is the real gate for `/client/*`). Two routers (`hermes`, `automations`) are carved out onto a new hard `require_staff` / `require_staff_principal` gate that never reads the flag. | |
 | D23 | Client-workspace seats may use the full internal app (chat, files, agents, skills, studio, tasks, conversations, image), behind one reversible switch (`CLIENT_INTERNAL_ACCESS_ENABLED`, default **off** in code) — not just `/client/*`. When on: `require_internal` admits client seats to the internal routers — except `hermes` and `automations`, which stay on a hard `require_staff` gate — and `workspace_visibility_filter` widens to "the shared internal pool is readable by everyone; a workspace's own rows stay readable only within that workspace." Everything a client seat *creates* is stamped with its own `workspace_id` and forced private to that seat (`scope="personal"` / `visibility="personal"`), because every booth attendee shares one workspace (`redeem_invite` mints into `invite.workspace_id`) — client-to-client isolation is the one invariant this does not relax. | The owner wants event-booth attendees to get the whole product, not a walled demo, and explicitly accepted the resulting exposure of the internal knowledge base, public agents/skills, and staff emails on agent cards (`routers/agents.py`'s creator enrichment). A single flag keeps it reversible mid-event without a deploy. Per-seat private-by-default writes are required, not optional, because the pooled event cost cap (`workspaces.token_budget_limit`) is per-workspace, ruling out one workspace per invite as an alternative. See `docs/adr/0001-client-seats-in-the-internal-app.md`. |
+| D24 | The client entry point is **LINE Login**, not a single-use invite link. `users.line_user_id` (UNIQUE where NOT NULL, migration 0063) carries the verified `sub` from a LIFF `id_token`; a returning LINE user logs back into the SAME seat, and each LINE identity gets its own workspace. "One client, one run" moves from the door to the funnel: `POST /client/engagements` refuses a second brief while `CLIENT_SINGLE_ENGAGEMENT` is on. `/public/redeem` and `client_invites` are kept as the break-glass path, not as a second supported flow. | An invite bound single-use to a *link*, which could be forwarded (so "one use" never meant one person) and, once spent, permanently locked out anyone who closed their tab — with no way to re-identify them. Binding to a verified identity fixes both, and makes the constraint a database invariant instead of a `redeemed_at` read-then-write that two concurrent logins can race. Per-LINE-user workspaces (rather than the shared booth workspace of D23) keep the pooled `token_budget_limit` per person, so one heavy client cannot drain everyone's budget. Consent stops being implied: D21's invite was sent by Brandbiz to a known contact and stood in for the privacy notice, which a self-serve login cannot, so PDPA consent is collected at the door and `consent_acknowledged_at` is no longer pre-set. |
 
 ---
 
@@ -1176,6 +1177,91 @@ section tracks task-level progress per the usual PLAN.md convention.
       in the ad-hoc verification venv breaks `app.main` import for every test in that file
       identically (pre-existing, not a regression); needs verification in the project's real
       dev/CI environment.
+
+- ☑ 5.11 Editable company profile → resubmit for a revised plan — the Profile tab (`WorkPanel.tsx`)
+      was strictly read-only; a client who mistyped an intake answer had no way to correct it. Adds
+      `PATCH /client/intake/fields` (correct one or more already-answered fields; only fields already
+      reached — `idx < profile.step` — are editable, so this can never skip ahead of the scripted
+      intake; per-user rate limited via a new `rate_limit.check()` helper, not IP-keyed, since D23
+      puts every booth attendee behind one shared NAT IP) and `PUT /client/plans/{id}`
+      (`plan_svc.revise_plan`, bumping `Plan.version`/appending a `PlanVersion` row on the *same*
+      plan — the `plan_updated` audit action and `plan_versions` schema already existed for this,
+      unused since 5.4). `plan.status` is never touched by a revision — stays `"draft · awaiting
+      expert review"` per the liability-control note below. Saving a profile edit while intake is
+      already complete re-runs the full research → case-match → draft pipeline (both already
+      idempotent: `/research` is latest-wins, `/cases` already delete-and-replaces per conversation)
+      so the plan a client walks away with never cites stale market data. New audit action
+      `intake_edited` (migration `0048`, mirrored in `app/models/audit.py` and
+      `tests/integration/conftest.py` per the enum-sync test). Also fixed two pre-existing bugs the
+      edit form would otherwise have inherited: chip answers optimistically wrote the Thai chip
+      label into `fields` state while the backend stores the English option value, and free-text
+      answers never updated `fields` at all — both replaced by trusting the new canonical
+      `fields` the backend now returns from `POST /client/intake/answer` and
+      `PATCH /client/intake/fields`. Backend unit tests green (4 new intake-edit tests, 4 new
+      plan-revise tests, `field_manifest()`/`index_of_field` coverage extended); the 33 pre-existing
+      failures are the same host-env `ENCRYPTION_KEY`-length / SDK-stub gaps documented under 5.9/5.10,
+      confirmed unrelated (none of the failing files were touched). Frontend type-checks clean
+      (`tsc --noEmit`). No manual browser click-through in this session — see PROGRESS.md.
+
+- ☑ 5.12 Switch between plans, and between a plan's versions — 5.11's revise-in-place made a
+      workspace hold exactly one plan forever (`ClientWorkspace.tsx`'s `revising = !!savedPlan` PUT
+      every subsequent save; bootstrap forced `planDrafted=true` on reload, permanently hiding
+      "Draft my plan"), even though `plans` has no unique constraint on `(workspace_id, user_id)` and
+      `POST /client/plans` already creates a fresh row — only the frontend forced single-plan
+      behavior. Now a seat can hold several plans: `BootstrapOut.plans` (replacing the old
+      `latest_plan`) lists all of them; a top-bar switcher popover picks which one is "active" (a
+      per-device `localStorage` preference, not schema — no server column needed); the draft card
+      asks each time — **Save as vN of "…"** (`PUT /client/plans/{id}` → `plan_svc.revise_plan`) vs.
+      **Save as a new plan** (`POST /client/plans` → `plan_svc.save_plan`, unconditional, never
+      queries for an existing plan first). Also made version history actually readable: migration
+      `0049` adds nullable `title`/`provenance` to `plan_versions` (previously `revise_plan`
+      overwrote the parent Plan's title/provenance wholesale with nothing capturing what v1 actually
+      said — the Versions rail listed dead rows with no way to open them), `save_plan`/`revise_plan`
+      now snapshot both on every write, and new `GET /client/plans/{id}/versions/{v}`
+      (`plan_svc.get_version`/`decrypt_version_body`, read-only, no audit/rate-limit) serves an old
+      version's body. `PlanSideRail`'s Versions rows are now clickable; `PlanDocument` swaps in the
+      selected version's title/body/budget above a "Viewing vN · Back to latest" banner and hides
+      rating/share/export/lead-CTA while viewing history (none take a version parameter — an old
+      snapshot is read-only). A version saved before 0049 has no snapshot: the endpoint falls back to
+      the parent Plan's title only (never its provenance, which could misattribute a later research
+      run to older content) and the rail says "Provenance wasn't recorded for this version." 14 new
+      backend unit tests (`test_plan_versions.py`, `test_client_router_plan_version.py`,
+      `test_client_router_save_plan.py`, plus 2 extended assertions in `test_plan_revise.py` pinning
+      that a version row snapshots the draft's title/provenance, not just its body) — all pass;
+      786 passed/16 pre-existing failures overall (same `ENCRYPTION_KEY`-length/SDK-stub gaps as
+      5.9-5.11, confirmed unrelated — none of the 16 failing files were touched, and the count is
+      actually down from 5.11's 33, apparently host-env flakiness in `test_llm_tuning.py`/
+      `test_orchestrator.py` rather than anything this session did). Frontend: `tsc --noEmit` clean
+      and `npm run build` compiles with zero errors/warnings across all routes including the new
+      `/api/client/plans/[id]/versions/[version]` BFF route. No manual browser click-through this
+      session — see PROGRESS.md.
+
+- ☑ 5.13 LINE Login replaces single-use invite links (D24) — the `/try/<token>` flow made "one client,
+      one run" a property of the link, so a forwarded link was still one use and a closed tab was a
+      permanent lockout. Adds `users.line_user_id` + a partial UNIQUE index (migration `0063`,
+      mirrored in `app/models/user.py`'s `__table_args__` because the integration harness builds
+      schema from ORM metadata, not migrations), `app/services/line_auth.py` (verifies the `id_token`
+      against LINE's `/oauth2/v2.1/verify` rather than locally — LINE signs HS256 or ES256 depending
+      on channel config, and delegating means never tracking that or its key rotation),
+      `workspace_svc.provision_line_seat` (find-or-create, idempotent by design — the exact opposite
+      of `redeem_invite`, and it adopts the winner on an `IntegrityError` when two logins race), and
+      `POST /public/line/login`, which reuses `_create_jwt`/`_set_jwt_cookie` so every downstream
+      check (`get_current_user`, `require_client_context`, `middleware.ts`) is untouched. The
+      single-run rule moves to `engagement_svc.start_new` (409, behind `CLIENT_SINGLE_ENGAGEMENT`);
+      the schema always supported repeat briefs via `engagements.seq` and still does with the flag
+      off. Frontend: `/try` + `components/client/LineLogin.tsx` (LIFF SDK from LINE's CDN, not
+      bundled — LINE ships fixes to the edge build), a BFF proxy at `/api/public/line/login`, and
+      `middleware.ts` gains a `pathname === '/try'` arm, since `startsWith('/try/')` does not match
+      the bare path. PDPA consent is an explicit tick that gates the button and is re-checked
+      server-side (403) — `consent_acknowledged_at` is only set when given, unlike `redeem_invite`.
+      8 new unit tests (`test_line_auth.py`) pass; full unit suite 1016 passed / 13 failed, and the
+      13 are byte-identical to the pre-change baseline (verified by stashing — same `ENCRYPTION_KEY`
+      /SDK-stub host gaps as 5.9-5.12). Frontend `tsc --noEmit` clean. **Not yet executed:** the 8
+      new integration tests (`tests/integration/test_line_login.py`) and the amended
+      `test_engagement_funnel.py` — they collect cleanly (15 tests) but need the pytest-docker
+      Postgres harness, and Docker is unavailable on this host. Also unverified end to end: no LINE
+      Login channel or LIFF app exists yet, so `/public/line/login` returns 503 until
+      `LINE_LOGIN_CHANNEL_ID` is set.
 
 Seed script: `backend/scripts/seed_client_demo.py` provisions a demo workspace, agent, department
 grant, and a placeholder rate card, and mints one invite — run it, then upload + attach sanitized

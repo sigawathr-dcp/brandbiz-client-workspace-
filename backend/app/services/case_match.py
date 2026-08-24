@@ -13,6 +13,7 @@ writes nothing to the database.
 """
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -20,8 +21,11 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.models.client_intake import CaseStudy, CaseStudyTag
 from app.models.file import FileChunk
 from app.models.user import User
+from app.services import case_score as score_svc
 from app.services import client_intake as intake_svc
 from app.services.case_card import CaseCard, parse_case_card
 from app.tools import rag_search
@@ -36,11 +40,18 @@ class CaseMatchResult:
     file_id: uuid.UUID
     filename: str
     distance: float  # raw cosine distance of the best chunk (lower = closer)
-    score: float  # max(0, min(1, 1 - distance)) — the number shown to the client
-    rank: int  # 0-based, after sorting by (distance, filename)
+    score: float  # 0..1 shown to the client — blended, see match_cases()
+    rank: int  # 0-based, after sorting by (-score, filename)
     best_chunk_index: int
     rationale: str  # best chunk content[:280]
     card: CaseCard | None  # None when include_cards=False
+    # Per-dimension contributions behind `score` (app/services/case_score.py).
+    # None when the case library carries no tags yet, or when the tag model is
+    # switched off with case_match_tag_weight = 0 — in both cases `score` is
+    # the plain cosine similarity it has always been.
+    breakdown: score_svc.CaseScore | None = None
+    # Dimensions that matched outright, for the card's "ตรงกับ: …" line.
+    matched_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,12 +68,15 @@ def build_context_query(fields: Mapping[str, str]) -> str:
     sequentially), so this is a no-op there; fixing the order removes a
     nondeterminism source for callers (e.g. the eval harness) that may
     build a `fields` dict by other means.
+
+    Which fields are eligible — including how answers from an older script
+    version are carried, and why solution-trigger answers are excluded — is
+    decided by client_intake.match_query_fields(), so this builder and every
+    eval variant it is benchmarked against cannot disagree about it.
     """
-    ordered_keys = [step["field"] for step in intake_svc.INTAKE_SCRIPT]
     return "; ".join(
         f"{intake_svc.FIELD_LABELS.get(k, k)}: {fields[k]}"
-        for k in ordered_keys
-        if k in fields
+        for k in intake_svc.match_query_fields(fields)
     )
 
 
@@ -106,6 +120,32 @@ async def cards_for_file_ids(
     return {fid: parse_case_card(text) for fid, text in full_texts.items()}
 
 
+async def tags_for_file_ids(
+    session: AsyncSession, file_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, set[str]]]:
+    """{file_id: {dimension: {token, ...}}} for the candidate cases.
+
+    Keyed by file_id, not case_study_id, because retrieval works in files
+    (chunks belong to files) while tags hang off the case_studies catalog
+    row — this join is the one place that gap is bridged. A case with no
+    tags is simply absent from the result; case_score treats that as
+    "unknown", not "unsuitable".
+    """
+    if not file_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(CaseStudy.file_id, CaseStudyTag.tag_type, CaseStudyTag.tag_value)
+            .join(CaseStudyTag, CaseStudyTag.case_study_id == CaseStudy.id)
+            .where(CaseStudy.file_id.in_(file_ids))
+        )
+    ).all()
+    out: dict[uuid.UUID, dict[str, set[str]]] = {}
+    for file_id, tag_type, tag_value in rows:
+        out.setdefault(file_id, {}).setdefault(tag_type, set()).add(tag_value)
+    return out
+
+
 async def match_cases(
     session: AsyncSession,
     user: User,
@@ -118,6 +158,7 @@ async def match_cases(
     query: str | None = None,
     include_cards: bool = True,
     strict: bool = False,
+    alpha: float | None = None,
 ) -> CaseMatchRun:
     """Score a client's intake profile against the case library reachable
     by `user` (narrowed to `agent_file_ids` when given).
@@ -130,16 +171,45 @@ async def match_cases(
     defaults to False (production behaviour: degrade gracefully); the eval
     harness passes True so an embed-server outage aborts loudly instead of
     silently reporting "0.0 accuracy" for every profile.
+
+    Ranking is the alpha blend described in app/services/case_score.py:
+    retrieval widens to a candidate POOL (settings.case_match_pool_chunks,
+    relevance cutoff disabled) and the weighted tag score decides what
+    surfaces from it. Leaving retrieval at `rag_top_k` would let cosine
+    pre-select the shortlist and make the interview's weights decorative —
+    the weights could only reorder five cases cosine had already chosen.
+
+    `alpha` overrides settings.case_match_tag_weight for one call (the eval
+    harness sweeps it). alpha = 0 is the pre-tagging behaviour exactly, and
+    is also what an untagged corpus degrades to on its own.
+
+    Callers that pass an explicit `top_k` / `max_distance` (the eval
+    harness's deep-pool mode) keep them: an explicit request always beats
+    the pool default.
     """
     q = query if query is not None else build_context_query(fields)
+    a = settings.case_match_tag_weight if alpha is None else alpha
+    a = max(0.0, min(1.0, a))
+
+    # Widen the pool only when the tag model is actually doing something. At
+    # alpha = 0 the ranking is pure cosine, so pulling 200 chunks instead of
+    # 5 would cost latency for an identical top-5.
+    pool_k = top_k
+    pool_max_distance = max_distance
+    if a > 0.0:
+        if pool_k is None:
+            pool_k = settings.case_match_pool_chunks
+        if pool_max_distance is None:
+            pool_max_distance = math.inf
+
     chunks = await rag_search.retrieve(
         session,
         user,
         q,
-        top_k=top_k,
+        top_k=pool_k,
         file_ids=agent_file_ids,
         effective_workspace_id=effective_workspace_id,
-        max_distance=max_distance,
+        max_distance=pool_max_distance,
         strict=strict,
     )
 
@@ -154,24 +224,65 @@ async def match_cases(
         matched_file_ids = [uuid.UUID(c.file_id) for c in best_chunks]
         cards = await cards_for_file_ids(session, matched_file_ids)
 
+    # Corpus tags for the candidates. Empty dict when nothing is tagged yet,
+    # which case_score turns into a damped-dense score per dimension rather
+    # than a zero — a half-tagged corpus stays usable while tagging catches up.
+    tags_by_file: dict[uuid.UUID, dict[str, set[str]]] = {}
+    if a > 0.0 and best_chunks:
+        tags_by_file = await tags_for_file_ids(
+            session, [uuid.UUID(c.file_id) for c in best_chunks]
+        )
+    client_tags = score_svc.client_tags_from_fields(fields) if a > 0.0 else {}
+
     results: list[CaseMatchResult] = []
     for c in best_chunks:
         file_id = uuid.UUID(c.file_id)
         card = cards[file_id] if file_id in cards else (parse_case_card(c.content) if include_cards else None)
+        dense = to_match_score(c.score)
+
+        breakdown: score_svc.CaseScore | None = None
+        if a > 0.0:
+            breakdown = score_svc.score_case(
+                client_tags,
+                tags_by_file.get(file_id, {}),
+                intake_svc.SCORING_WEIGHTS,
+                dense,
+                alpha=a,
+            )
+            final = breakdown.final
+            matched_on = breakdown.matched_dimensions
+        else:
+            final = dense
+            matched_on = ()
+
         results.append(
             CaseMatchResult(
                 file_id=file_id,
                 filename=c.filename,
                 distance=c.score,
-                score=to_match_score(c.score),
+                score=final,
                 rank=0,  # filled in after the deterministic sort below
                 best_chunk_index=c.chunk_index,
                 rationale=c.content[:280],
                 card=card,
+                breakdown=breakdown,
+                matched_on=matched_on,
             )
         )
 
-    results.sort(key=lambda r: (r.distance, r.filename))
+    # Below the floor a case is not worth showing at all. Applied only when
+    # the tag model is on: at alpha = 0 the caller's max_distance is still the
+    # only cutoff, exactly as before.
+    if a > 0.0:
+        results = [r for r in results if r.score >= settings.case_match_min_score]
+
+    # Descending score. Filename remains the tiebreak so equal scores order
+    # deterministically — several cases legitimately tie once scoring is
+    # discrete tag overlap rather than a continuous cosine.
+    results.sort(key=lambda r: (-r.score, r.filename))
+    if a > 0.0:
+        results = results[: settings.case_match_top_n]
+
     results = [
         CaseMatchResult(
             file_id=r.file_id,
@@ -182,6 +293,8 @@ async def match_cases(
             best_chunk_index=r.best_chunk_index,
             rationale=r.rationale,
             card=r.card,
+            breakdown=r.breakdown,
+            matched_on=r.matched_on,
         )
         for i, r in enumerate(results)
     ]

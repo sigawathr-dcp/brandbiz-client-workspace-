@@ -1,15 +1,21 @@
 """Unit tests for draft_plan()'s provenance.research_sources.
 
-The plan document's redesigned provenance rail renders real citations from
-the ResearchRun a plan drew on, never invented source names (PLAN.md Phase
-5 redesign notes) — so draft_plan() must copy ResearchRun.citations
+The plan document's provenance rail renders real citations from the
+ResearchRun a plan drew on, never invented source names (PLAN.md Phase 5
+redesign notes) — so draft_plan() must copy the run's ResearchCitation rows
 verbatim into provenance["research_sources"], and must not fabricate them
 when there is no completed research run to draw on.
 
+DB redesign: draft_plan() now resolves its research run via the
+engagement's own step 2 record (app/services/engagement.py) rather than a
+bare (workspace_id, user_id) filter — see app/services/plan.py::
+_latest_done_research/_latest_case_matches, which this test patches
+directly rather than replicating their internal query shape (that shape is
+covered by the integration suite; this test is about provenance assembly).
+
 Everything except the provenance assembly (agent lookup, rate card
-availability, the drafting LLM call, pricing) is mocked out — this is not a
-retest of prepare_chat/run_chat_collect/rate_card.price, which have their
-own coverage elsewhere.
+availability, the drafting LLM call, pricing, the research/case lookups
+themselves) is mocked out.
 """
 from __future__ import annotations
 
@@ -26,6 +32,13 @@ def _agent():
     a = MagicMock()
     a.id = uuid.uuid4()
     return a
+
+
+def _engagement():
+    e = MagicMock()
+    e.id = uuid.uuid4()
+    e.conversation_id = uuid.uuid4()
+    return e
 
 
 def _rate_item(code: str = "R1"):
@@ -79,29 +92,31 @@ async def test_research_sources_copies_real_citations():
     workspace_id = uuid.uuid4()
     user = MagicMock()
     user.id = uuid.uuid4()
-    conversation_id = uuid.uuid4()
+    engagement = _engagement()
     fields = {"industry": "Retail + online"}
 
     research = MagicMock()
     research.id = uuid.uuid4()
-    research.findings = [{"text": "finding"}]
-    research.citations = [{"index": 1, "source": "example.com"}]
 
+    citation = MagicMock()
+    citation.url = "example.com"
+    citation_result = MagicMock()
+    citation_result.scalars.return_value.all.return_value = [citation]
     session = AsyncMock()
-    research_result = MagicMock()
-    research_result.scalars.return_value.first.return_value = research
-    case_result = MagicMock()
-    case_result.scalars.return_value.all.return_value = []
-    session.execute = AsyncMock(side_effect=[research_result, case_result])
+    session.execute = AsyncMock(return_value=citation_result)
 
     with (
         patch.object(plan_svc.workspace_svc, "get_workspace_agent", new=AsyncMock(return_value=_agent())),
         patch.object(plan_svc, "_available_rate_card", new=AsyncMock(return_value=[_rate_item()])),
+        patch.object(plan_svc, "_latest_done_research", new=AsyncMock(return_value=research)),
+        patch.object(plan_svc, "_research_finding_texts", new=AsyncMock(return_value=["finding"])),
+        patch.object(plan_svc, "_latest_case_matches", new=AsyncMock(return_value=[])),
+        patch.object(plan_svc.engagement_svc, "get_step", new=AsyncMock(return_value=MagicMock(id=uuid.uuid4()))),
         patch.object(plan_svc, "prepare_chat", new=AsyncMock(return_value=_prepared())),
         patch.object(plan_svc, "run_chat_collect", new=AsyncMock(return_value=_collect_result())),
         patch.object(plan_svc.rate_card_svc, "price", new=AsyncMock(return_value=_priced_budget())),
     ):
-        result = await plan_svc.draft_plan(session, user, workspace_id, conversation_id, fields)
+        result = await plan_svc.draft_plan(session, user, workspace_id, engagement, fields)
 
     assert result["provenance"]["research_sources"] == [{"index": 1, "source": "example.com"}]
     assert result["provenance"]["research_run_id"] == str(research.id)
@@ -112,24 +127,22 @@ async def test_research_sources_empty_when_no_completed_research_run():
     workspace_id = uuid.uuid4()
     user = MagicMock()
     user.id = uuid.uuid4()
-    conversation_id = uuid.uuid4()
+    engagement = _engagement()
     fields = {"industry": "Retail + online"}
 
     session = AsyncMock()
-    research_result = MagicMock()
-    research_result.scalars.return_value.first.return_value = None  # no research run yet
-    case_result = MagicMock()
-    case_result.scalars.return_value.all.return_value = []
-    session.execute = AsyncMock(side_effect=[research_result, case_result])
 
     with (
         patch.object(plan_svc.workspace_svc, "get_workspace_agent", new=AsyncMock(return_value=_agent())),
         patch.object(plan_svc, "_available_rate_card", new=AsyncMock(return_value=[_rate_item()])),
+        patch.object(plan_svc, "_latest_done_research", new=AsyncMock(return_value=None)),  # no run yet
+        patch.object(plan_svc, "_latest_case_matches", new=AsyncMock(return_value=[])),
+        patch.object(plan_svc.engagement_svc, "get_step", new=AsyncMock(return_value=MagicMock(id=uuid.uuid4()))),
         patch.object(plan_svc, "prepare_chat", new=AsyncMock(return_value=_prepared())),
         patch.object(plan_svc, "run_chat_collect", new=AsyncMock(return_value=_collect_result())),
         patch.object(plan_svc.rate_card_svc, "price", new=AsyncMock(return_value=_priced_budget())),
     ):
-        result = await plan_svc.draft_plan(session, user, workspace_id, conversation_id, fields)
+        result = await plan_svc.draft_plan(session, user, workspace_id, engagement, fields)
 
     assert result["provenance"]["research_sources"] == []
     assert result["provenance"]["research_run_id"] is None

@@ -60,14 +60,22 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
 async function AuthedSidebar({ token }: { token: string }) {
   const user = await getUser(token)
-  if (!user) redirect('/login')
+  // Token was present but the backend rejected it (expired/stale) — route
+  // through /api/session-expired to clear the cookie first, or
+  // middleware.ts (which only checks cookie presence) bounces straight
+  // back here forever. See that route's comment for the full loop.
+  if (!user) redirect('/api/session-expired')
   if (user.role !== 'ADMIN') redirect('/chat')
   return <NavSidebar user={user} />
 }
 
 async function GatedContent({ token, children }: { token: string; children: React.ReactNode }) {
   const user = await getUser(token)
-  if (!user) redirect('/login')
+  // Token was present but the backend rejected it (expired/stale) — route
+  // through /api/session-expired to clear the cookie first, or
+  // middleware.ts (which only checks cookie presence) bounces straight
+  // back here forever. See that route's comment for the full loop.
+  if (!user) redirect('/api/session-expired')
   if (user.role !== 'ADMIN') redirect('/chat')
   return <>{children}</>
 }

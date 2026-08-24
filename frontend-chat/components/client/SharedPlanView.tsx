@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { money, moneyCol } from './budgetTable'
 
 interface SharedPlan {
   id: string
@@ -83,8 +84,8 @@ export default function SharedPlanView({ token }: { token: string }) {
               <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 7 }}>Adapted plan</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
                 {plan.adapted_plan.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 12 }}>
-                    <div style={{ width: 54, flex: 'none', fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)', paddingTop: 2 }}>{item.period}</div>
+                  <div key={i} className="client-plan-phase">
+                    <div className="client-plan-phase-period">{item.period}</div>
                     <div style={{ fontSize: 14.5, lineHeight: 1.6, color: 'var(--ink-2)' }}>{item.text}</div>
                   </div>
                 ))}
@@ -98,13 +99,13 @@ export default function SharedPlanView({ token }: { token: string }) {
                     {budget.lines.map((l) => (
                       <tr key={l.code}>
                         <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-2)' }}>{l.label}</td>
-                        <td style={{ padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{l.amount}</td>
+                        <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{money(l.amount)}</td>
                       </tr>
                     ))}
                     <tr>
                       <td style={{ padding: '12px 0 0', borderTop: '2px solid var(--ink)', fontWeight: 600, fontSize: 15 }}>Estimate</td>
-                      <td style={{ padding: '12px 0 0 14px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15 }}>
-                        {budget.currency} {budget.total}
+                      <td style={{ ...moneyCol, padding: '12px 0 0 14px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15 }}>
+                        {budget.currency} {money(budget.total)}
                       </td>
                     </tr>
                   </tbody>

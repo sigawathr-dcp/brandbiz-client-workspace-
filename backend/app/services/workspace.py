@@ -30,17 +30,19 @@ module too as it grows.
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import settings
-from app.models.agent import Agent
+from app.models.agent import Agent, AgentFile
 from app.models.client_invite import ClientInvite
 from app.models.department import Department, UserDepartment
 from app.models.user import User
@@ -55,6 +57,8 @@ from app.services import audit as audit_svc
 # GET/PUT /admin/permissions/department UI — this constant only ensures the
 # department itself, and every seat's membership in it, always exist.
 CLIENT_DEPARTMENT_CODE = "client-workspaces"
+
+_logger = logging.getLogger(__name__)
 
 
 def is_client_seat(user: User) -> bool:
@@ -357,6 +361,209 @@ async def redeem_invite(session: AsyncSession, *, raw_token: str) -> tuple[User,
 
 
 # ---------------------------------------------------------------------------
+# LINE Login entry point (0063) — replaces single-use invite links
+# ---------------------------------------------------------------------------
+
+def _line_workspace_slug(line_user_id: str) -> str:
+    """Deterministic slug for a LINE-provisioned workspace.
+
+    Derived from the LINE sub rather than random so support can answer
+    "which workspace is this LINE user?" from the sub alone, without a
+    query. Hashed rather than embedded verbatim because the slug appears in
+    the seat's synthetic email and in admin URLs, and a raw LINE user id is
+    a stable cross-service identifier we would rather not scatter.
+    """
+    digest = hashlib.sha256(line_user_id.encode()).hexdigest()
+    return f"line-{digest[:12]}"
+
+
+async def get_seat_by_line_user_id(session: AsyncSession, line_user_id: str) -> User | None:
+    return (await session.execute(
+        select(User).where(User.line_user_id == line_user_id)
+    )).scalar_one_or_none()
+
+
+async def provision_line_seat(
+    session: AsyncSession,
+    *,
+    line_user_id: str,
+    display_name: str | None,
+    avatar_url: str | None,
+    consent_given: bool,
+) -> tuple[User, Workspace, bool]:
+    """Find-or-create the seat for a verified LINE identity. Returns
+    (seat, workspace, is_new).
+
+    This is the LINE-login counterpart to redeem_invite, and the contrast is
+    the whole point of 0063. redeem_invite is deliberately NOT idempotent —
+    a second POST with the same token must not mint a second seat, so it
+    410s. This one IS idempotent by design: a returning LINE user logs back
+    into the same seat and the same finished plan. "One use" is enforced one
+    level up, at POST /client/engagements (engagement.py::start_new refuses
+    a second brief when settings.client_single_engagement is on), not by
+    locking the person out of the door.
+
+    Each LINE user gets their OWN workspace, so the pooled
+    token_budget_limit (PolicyEngine.decide Rule 5) is per person — with a
+    single shared workspace one heavy user would starve everyone else's
+    budget for the rest of the month.
+    """
+    existing = await get_seat_by_line_user_id(session, line_user_id)
+    if existing is not None:
+        return await _refresh_line_seat(
+            session,
+            seat=existing,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            consent_given=consent_given,
+        )
+
+    try:
+        return await _create_line_seat(
+            session,
+            line_user_id=line_user_id,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            consent_given=consent_given,
+        )
+    except IntegrityError:
+        # uq_users_line_user_id fired: a concurrent login for the same sub
+        # won the race between our SELECT above and this INSERT — a
+        # double-tap on the LIFF login button is exactly two in-flight
+        # requests. The other request created the seat we wanted, so adopt
+        # it. This is why the constraint lives in the database and not only
+        # in the check above.
+        await session.rollback()
+        seat = await get_seat_by_line_user_id(session, line_user_id)
+        if seat is None:
+            raise
+        return await _refresh_line_seat(
+            session,
+            seat=seat,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            consent_given=consent_given,
+        )
+
+
+async def _refresh_line_seat(
+    session: AsyncSession,
+    *,
+    seat: User,
+    display_name: str | None,
+    avatar_url: str | None,
+    consent_given: bool,
+) -> tuple[User, Workspace, bool]:
+    """A returning LINE user. Refreshes the display fields from the current
+    LINE profile (they may have renamed themselves since) and records the
+    visit; never touches workspace assignment."""
+    if not seat.is_active:
+        # An admin deactivated this seat. Re-provisioning would hand back
+        # access they deliberately removed, so stop here.
+        raise HTTPException(403, "This account is no longer active")
+
+    workspace = await get_workspace(session, seat.workspace_id) if seat.workspace_id else None
+    if workspace is None or workspace.archived_at is not None:
+        raise HTTPException(404, "Workspace is no longer available")
+
+    now = datetime.now(timezone.utc)
+    if display_name:
+        seat.display_name = display_name
+    if avatar_url:
+        seat.avatar_url = avatar_url
+    if consent_given and seat.consent_acknowledged_at is None:
+        seat.consent_acknowledged_at = now
+    seat.last_login_at = now
+    await session.commit()
+    await session.refresh(seat)
+
+    await audit_svc.log(
+        action="client_line_login",
+        user_id=seat.id,
+        resource_type="workspace",
+        resource_id=workspace.id,
+        details={"returning": True},
+    )
+    return seat, workspace, False
+
+
+async def _create_line_seat(
+    session: AsyncSession,
+    *,
+    line_user_id: str,
+    display_name: str | None,
+    avatar_url: str | None,
+    consent_given: bool,
+) -> tuple[User, Workspace, bool]:
+    slug = _line_workspace_slug(line_user_id)
+    now = datetime.now(timezone.utc)
+
+    workspace = Workspace(
+        name=display_name or "LINE client",
+        slug=slug,
+        kind="client",
+        line_user_id=line_user_id,
+        contact_name=display_name,
+        monthly_token_limit=settings.client_default_monthly_token_limit,
+        token_budget_limit=settings.client_default_workspace_budget,
+    )
+    session.add(workspace)
+    await session.flush()  # need workspace.id for the seat below
+
+    seat = User(
+        # Same synthetic-identity trick redeem_invite uses: users.google_email
+        # is NOT NULL UNIQUE and a client seat has no Google account. The
+        # RFC 2606 .invalid TLD guarantees this can never collide with, or be
+        # typo'd into, a real domain.
+        google_email=f"client-{uuid.uuid4().hex}@{slug}.client.invalid",
+        display_name=display_name or workspace.name,
+        avatar_url=avatar_url,
+        role="L1",
+        workspace_id=workspace.id,
+        line_user_id=line_user_id,
+        is_active=True,
+        # NOT pre-set the way redeem_invite does it. That shortcut was
+        # justified by the invite link being sent by Brandbiz to a known
+        # contact, which stood in for the login-time privacy notice. A
+        # self-serve LINE login has no such prior contact, so consent has to
+        # be collected at the door — the LIFF page ticks it and the router
+        # refuses a login without it. require_consent (app/deps.py) is what
+        # would otherwise bounce this seat out of every /client/* route.
+        consent_acknowledged_at=now if consent_given else None,
+        last_login_at=now,
+    )
+    session.add(seat)
+    await session.flush()
+
+    dept = await _ensure_client_department(session)
+    session.add(UserDepartment(user_id=seat.id, department_id=dept.id))
+
+    # Before the commit, so a workspace never exists without its persona.
+    # The invite flow gets its agent from an admin running assign_agent()
+    # after POST /admin/clients; a self-serve login has no admin in the
+    # loop, and an agent-less workspace 503s the moment the funnel reaches
+    # POST /client/plan/draft (services/plan.py::draft_plan).
+    agent = await clone_template_agent(session, workspace_id=workspace.id, owner_id=seat.id)
+
+    await session.commit()
+    await session.refresh(seat)
+    await session.refresh(workspace)
+
+    await audit_svc.log(
+        action="client_line_login",
+        user_id=seat.id,
+        resource_type="workspace",
+        resource_id=workspace.id,
+        details={
+            "returning": False,
+            "workspace_slug": slug,
+            "agent_id": str(agent.id) if agent else None,
+        },
+    )
+    return seat, workspace, True
+
+
+# ---------------------------------------------------------------------------
 # Agent assignment (Phase 3) — which Agent is "the" persona for a workspace
 # ---------------------------------------------------------------------------
 
@@ -374,6 +581,89 @@ async def get_workspace_agent(session: AsyncSession, workspace_id: uuid.UUID) ->
         .where(Agent.workspace_id == workspace_id, Agent.status == "published")
         .order_by(Agent.created_at.asc())
     )).scalars().first()
+
+
+async def clone_template_agent(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    owner_id: uuid.UUID,
+) -> Agent | None:
+    """Copy settings.client_template_agent_id into `workspace_id` as its own
+    Agent row, and return it (None if no template is configured or the id
+    does not resolve to a published agent).
+
+    A *copy*, not assign_agent(): agents.workspace_id is single-valued, so
+    handing the template itself to a new workspace would strip it from the
+    one it already serves. Each workspace owning its row also means an admin
+    can tune one client's persona without touching every other client's.
+
+    agent_files rows are copied too — the น้องภูมิ template carries the case
+    library (21 files at time of writing) and a clone without them answers
+    from nothing. Files themselves are not duplicated; both agents point at
+    the same files.id rows, which is safe because agent_files is a pure
+    association and the RAG path re-checks file visibility per query
+    (app/tools/rag_search.py).
+
+    Does NOT commit — the caller is mid-transaction building the workspace.
+    """
+    template_id = (settings.client_template_agent_id or "").strip()
+    if not template_id:
+        _logger.warning(
+            "clone_template_agent: CLIENT_TEMPLATE_AGENT_ID unset — workspace %s "
+            "comes up with no agent and cannot draft a plan until an admin assigns one",
+            workspace_id,
+        )
+        return None
+    try:
+        parsed = uuid.UUID(template_id)
+    except ValueError:
+        _logger.warning(
+            "clone_template_agent: CLIENT_TEMPLATE_AGENT_ID is not a uuid — ignoring"
+        )
+        return None
+
+    template = (await session.execute(
+        select(Agent).where(Agent.id == parsed, Agent.status == "published")
+    )).scalar_one_or_none()
+    if template is None:
+        _logger.warning(
+            "clone_template_agent: CLIENT_TEMPLATE_AGENT_ID %s is not a published agent", parsed
+        )
+        return None
+
+    clone = Agent(
+        # The seat, not the template's author: a client workspace's agent is
+        # owned inside that workspace, so deleting the internal admin who
+        # authored the template does not CASCADE away every client's persona.
+        user_id=owner_id,
+        name=template.name,
+        description=template.description,
+        instructions=template.instructions,
+        provider=template.provider,
+        model=template.model,
+        capabilities=dict(template.capabilities) if template.capabilities else None,
+        creativity_level=template.creativity_level,
+        # Both forced, for the same reason assign_agent() forces them: a
+        # "personal" or "draft" clone is invisible to the seat it was made
+        # for (agent.py::_accessible_filter, get_workspace_agent()).
+        visibility="public",
+        status="published",
+        workspace_id=workspace_id,
+        avatar_color=template.avatar_color,
+        category=template.category,
+    )
+    session.add(clone)
+    await session.flush()
+
+    file_ids = (await session.execute(
+        select(AgentFile.file_id).where(AgentFile.agent_id == template.id)
+    )).scalars().all()
+    for file_id in file_ids:
+        session.add(AgentFile(agent_id=clone.id, file_id=file_id))
+    await session.flush()
+
+    return clone
 
 
 async def assign_agent(

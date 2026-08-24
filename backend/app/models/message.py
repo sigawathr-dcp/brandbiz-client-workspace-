@@ -32,6 +32,17 @@ class Message(Base):
         ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Which funnel chapter this turn belongs to, when the conversation is a
+    # client-workspace engagement's thread (DB redesign, migration 0050) —
+    # lets a client-workspace transcript replay per chapter instead of
+    # being rebuilt synthetically on every reload. NULL for internal chats
+    # and for any turn not tied to a specific step (general free-form chat
+    # within an engagement's conversation).
+    engagement_step_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("engagement_steps.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     role: Mapped[str] = mapped_column(_message_role_pg, nullable=False)
     # Nullable (as of 0047_message_retention) — D14 drops these 30 days after
     # created_at via app/services/retention.py::purge_expired_messages. The

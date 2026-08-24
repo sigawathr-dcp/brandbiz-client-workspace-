@@ -3,17 +3,18 @@ from __future__ import annotations
 
 from app.eval.query_variants import VARIANTS, natural_th, thai_labels, values_only
 from app.services import case_match
+from app.services.client_intake import INTAKE_SCRIPT
 
-_FIELDS = {
-    "industry": "Food & beverage / café",
-    "stage": "Growing, ready to expand",
-    "audience": "Urban working adults",
-    "challenge": "Low brand awareness",
-    "goal": "Grow sales / expand",
-    "horizon": "6 months",
-    "budget": "฿300,000 - 800,000",
-    "history": "One freelance logo project",
-}
+# Derived from the script, not transcribed: intake v2 renamed goal ->
+# objective / horizon -> timeframe and replaced history with asset_channel,
+# which silently invalidated the hand-written version of this fixture.
+_FIELDS = {step["field"]: step["options"][0]["value"] for step in INTAKE_SCRIPT}
+
+_IND = INTAKE_SCRIPT[0]
+_IND_VALUE, _IND_TH = _IND["options"][0]["value"], _IND["options"][0]["label"]
+_STAGE_VALUE = INTAKE_SCRIPT[1]["options"][0]["value"]
+_AUD = next(s for s in INTAKE_SCRIPT if s["field"] == "audience")
+_AUD_TH = _AUD["options"][0]["label"]
 
 
 class TestVariantRegistry:
@@ -32,7 +33,7 @@ class TestVariantRegistry:
 class TestThaiLabels:
     def test_uses_thai_field_and_chip_labels(self):
         result = thai_labels(_FIELDS)
-        assert "ธุรกิจ: ร้านอาหาร / คาเฟ่" in result
+        assert f"ธุรกิจ: {_IND_TH}" in result
 
     def test_falls_back_to_raw_value_for_unmapped_chip(self):
         fields = dict(_FIELDS, industry="ร้านขายของทั่วไป")
@@ -44,15 +45,15 @@ class TestValuesOnly:
     def test_no_field_labels_present(self):
         result = values_only(_FIELDS)
         assert "Business:" not in result
-        assert "Food & beverage / café" in result
+        assert _IND_VALUE in result
 
     def test_semicolon_joined_in_script_order(self):
         result = values_only(_FIELDS)
-        assert result.index("Food & beverage / café") < result.index("Growing, ready to expand")
+        assert result.index(_IND_VALUE) < result.index(_STAGE_VALUE)
 
 
 class TestNaturalTh:
     def test_produces_one_thai_sentence_with_all_field_values(self):
         result = natural_th(_FIELDS)
-        assert "ร้านอาหาร / คาเฟ่" in result
-        assert "คนวัยทำงานในเมือง" in result  # Thai chip label for audience
+        assert _IND_TH in result
+        assert _AUD_TH in result  # Thai chip label for audience

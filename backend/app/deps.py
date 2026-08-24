@@ -1,3 +1,4 @@
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from app.db import get_db as get_db  # noqa: F401 — re-export for router impor
 from app.models.user import User
 
 _API_KEY_PREFIX = "gw_"
+
+_logger = logging.getLogger(__name__)
 
 
 def _extract_token(request: Request) -> str | None:
@@ -204,6 +207,31 @@ async def require_internal(
     if settings.client_internal_access_enabled:
         return user
     return await require_staff(user)
+
+
+async def require_client_surface() -> None:
+    """D21/D22 event kill switch for the whole client-seat surface —
+    /client/*, /public/*, /admin/clients/*. Applied at include_router()
+    level in main.py, the same way require_internal gates the internal-app
+    routers, so a newly added route cannot forget it.
+
+    This replaced 22 hand-written `_require_enabled()` calls spread across
+    the three routers. Three of them had been missed — the /admin/clients
+    GET routes (list_workspaces, list_invites, get_workspace_agent_config)
+    — leaving workspace contact details, invite rows, and agent config
+    readable with the switch off, while every write route was correctly
+    blocked. A per-handler check that must be remembered 22 times gets
+    forgotten; a router-level dependency cannot be.
+
+    Ordering note: router-level dependencies resolve BEFORE the routers'
+    own auth dependencies, so with the switch off the surface answers 503
+    to everyone, authenticated or not. That is the intent — the switch
+    exists to make the surface dark during an incident, not to make it
+    read-only, and a 401-vs-503 split would leak which paths exist.
+    """
+    if not settings.client_surface_enabled:
+        _logger.warning("client surface: client_surface_enabled is False, rejecting request")
+        raise HTTPException(status_code=503, detail="Client workspaces are disabled")
 
 
 @dataclass

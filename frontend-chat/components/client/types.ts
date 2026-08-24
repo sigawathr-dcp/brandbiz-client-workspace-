@@ -18,11 +18,18 @@ export interface IntakeAnswerResponse {
   completion_message: string | null
   current_step: CurrentStep | null
   insight: string | null
+  // Canonical fields after this answer — see ClientWorkspace.tsx::answerIntake
+  // for why the frontend replaces its whole `fields` state from this instead
+  // of guessing at what the server stored.
+  fields: Record<string, string>
 }
 
 export interface IntakeField {
   key: string
   label: string
+  // Same chips the intake step offered — lets the Profile tab's edit mode
+  // (Task 5.11) render familiar chips instead of a bare free-text box.
+  options: Chip[]
 }
 
 export interface BootstrapData {
@@ -35,7 +42,13 @@ export interface BootstrapData {
     file_count: number
     web_search: boolean
   } | null
-  conversation_id: string
+  conversation_id: string | null
+  // DB redesign — the id of the engagement this bootstrap describes
+  // (app/models/engagement.py::Engagement) and which of its plans is
+  // "active" (what a revision targets, what the switcher checkmarks) —
+  // server state now, replacing the old bb:activePlan:* localStorage key.
+  engagement_id: string
+  active_plan_id: string | null
   step: number
   total_steps: number
   completed: boolean
@@ -62,7 +75,36 @@ export interface BootstrapData {
   research: ResearchResult | null
   cases_status: 'idle' | 'pending' | 'done' | 'error'
   cases: CasesResult | null
-  latest_plan: { id: string; version: number } | null
+  // The engagement's saved plan, replayed as the in-thread plan card. Before
+  // this existed bootstrap carried plan titles only (`plans` below), so a
+  // reload dropped the plan card out of the chat even though /w/plans still
+  // listed the plan — see app/routers/client.py::_plan_replay. null when the
+  // engagement has no saved plan (an unsaved draft is not replayable —
+  // POST /client/plan/draft persists no artifact).
+  plan: PlanReplay | null
+  // Task 5.12 — a seat can hold several plans (POST /client/plans always
+  // creates a new one; there's no unique constraint tying a workspace/user
+  // to a single row), so bootstrap replays the full list, newest first,
+  // instead of only the most recently saved one.
+  plans: PlanSummary[]
+  // The real chat bubbles to re-render, oldest first — the interview Q&A
+  // ('interview') followed by any free-form turns ('chat'). Replaces the
+  // synthetic thread this component used to rebuild on every mount, which
+  // meant a refresh / tab close / phone screen-lock discarded everything
+  // the client had read. See app/routers/client.py::_transcript.
+  transcript: TranscriptTurn[]
+}
+
+export interface TranscriptTurn {
+  who: 'ai' | 'user'
+  stage: 'interview' | 'chat'
+  text: string
+}
+
+export interface PlanSummary {
+  id: string
+  title: string
+  version: number
 }
 
 export interface Finding {
@@ -93,6 +135,12 @@ export interface CaseMatchItem {
   source_url?: string | null
   summary?: string | null
   image_url?: string | null
+  // Scoring dimensions this case matched the client's intake on outright,
+  // already localised to Thai by the backend (app/routers/client.py::
+  // _DIMENSION_TH). Empty for matches stored before the weighted scorer
+  // existed, and whenever the tag model is switched off — the card then
+  // shows the score alone rather than claiming a match it cannot evidence.
+  matched_on?: string[] | null
 }
 
 export interface CasesResult {
@@ -133,6 +181,40 @@ export interface DraftPlan {
   conversation_id: string
 }
 
+// GET /client/bootstrap's `plan` — a DraftPlan that is already saved, so it
+// also carries the plan id (what the card's "View saved plan" link needs) and
+// the current version number. Reusing DraftPlan keeps the replayed card and a
+// fresh draft the same shape for PlanDraftCard.
+export interface PlanReplay extends DraftPlan {
+  id: string
+  version: number
+}
+
+// What POST /client/plan/revise changed, computed server-side
+// (app/services/plan.py::diff_versions). A chat edit is a re-draft under an
+// instruction, so the model CAN reword sections nobody asked about — this is
+// what makes that visible on the card instead of silent.
+export interface PlanDiff {
+  // Narrative fields that differ from the previous version: 'title',
+  // 'core_idea', 'analogous_case', 'adapted_plan'.
+  fields: string[]
+  budget: {
+    added: { code: string; label: string | null; amount: string | null }[]
+    removed: { code: string; label: string | null; amount: string | null }[]
+    qty_changed: { code: string; label: string | null; from: string; to: string }[]
+    total_before: string | null
+    total_after: string | null
+  }
+}
+
+// POST /client/plan/revise — already committed as the next version by the time
+// the frontend sees it (the confirmation chip was the confirmation), so it
+// carries the id and version a PlanReplay does plus what changed and why.
+export interface RevisedPlan extends PlanReplay {
+  revision_note: string
+  diff: PlanDiff
+}
+
 export interface PlanVersionSummary {
   version: number
   created_at: string
@@ -163,6 +245,21 @@ export interface SavedPlan {
   rating: PlanRatingData | null
 }
 
+// GET /client/plans/{id}/versions/{v} (Task 5.12) — a historical version's
+// body, read-only. title/provenance are the version's own snapshot
+// (migration 0049); for a version saved before that migration, title falls
+// back server-side to the parent Plan's title and provenance is null.
+export interface PlanVersionBody {
+  version: number
+  created_at: string
+  title: string
+  core_idea: string
+  analogous_case: string
+  adapted_plan: AdaptedPlanItem[]
+  budget: Budget | null
+  provenance: Record<string, unknown> | null
+}
+
 export type TurnKind = 'text' | 'research' | 'cases' | 'plan' | 'milestone'
 
 export interface Turn {
@@ -180,8 +277,31 @@ export interface Turn {
   planStatus?: 'pending' | 'done' | 'error'
   plan?: DraftPlan
   planError?: string
+  // Set when the draft failed with HTTP 503 — the workspace is missing a
+  // piece of setup (no assigned agent, no rate card) rather than having hit
+  // a transient provider failure. Retrying cannot clear it, so the card
+  // drops "try again in a moment".
+  planSetupError?: boolean
   planSaved?: boolean
   savedPlanId?: string
+  // Set when a save/revise attempt on this card's plan failed — surfaced
+  // on the card instead of only console.error'd (Task 5.12).
+  planSaveError?: string
+  // Set iff this plan card is a chat-driven revision rather than a fresh
+  // draft — see PlanDraftCard's `revision` prop. Its presence is what turns
+  // the card into "already saved, here is what changed".
+  planRevision?: { version: number; note: string; diff: PlanDiff }
+  // Set on an AI turn when the backend judged the client's message to be a
+  // request to change their plan (SSE notice `plan_edit_suggested`). Renders
+  // as a confirmation chip; nothing is revised until the client taps it.
+  // 'offered' → chip is up, 'running' → revision in flight, 'used'/'dismissed'
+  // → chip is gone.
+  planEdit?: {
+    planId: string
+    instruction: string
+    status: 'offered' | 'running' | 'used' | 'dismissed'
+    error?: string
+  }
   // set iff kind === 'milestone' — see MilestoneTurn.tsx
   milestone?: { title: string; sub: string }
   // set on the AI turn that follows an intake answer — see InsightCallout.tsx

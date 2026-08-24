@@ -10,21 +10,22 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
 // browser as a Bearer token — see frontend-chat's auth notes).
 export async function proxyJson(
   backendPath: string,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT',
   req: NextRequest
 ): Promise<NextResponse> {
   const cookieStore = await cookies()
   const token = cookieStore.get('access_token')?.value
   if (!token) return NextResponse.json({ detail: 'Unauthorized' }, { status: 401 })
 
+  const hasBody = method !== 'GET'
   try {
     const res = await fetch(`${BACKEND_URL}${backendPath}`, {
       method,
       headers: {
         Cookie: `access_token=${token}`,
-        ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       },
-      body: method === 'POST' ? await req.text() : undefined,
+      body: hasBody ? await req.text() : undefined,
       cache: 'no-store',
     })
     const text = await res.text()

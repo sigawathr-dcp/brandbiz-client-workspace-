@@ -1,229 +1,317 @@
 {
-  "version": 1,
-  "note": "Synthetic personas for the case-match eval harness (backend/scripts/eval_case_match_*.py). NEVER generated from real ClientProfile rows — those are AES-256-GCM encrypted client PII (see app/routers/client.py::_decrypt_fields). Field values are validated against app/services/client_intake.py's INTAKE_SCRIPT chip values by app/eval/goldens.py::load_profiles(), unless the field is listed in free_text_fields.",
+  "version": 3,
+  "note": "Synthetic personas for the case-match eval harness (backend/scripts/eval_case_match_*.py). NEVER generated from real ClientProfile rows — those are AES-256-GCM encrypted client PII (see app/routers/client.py::_decrypt_fields). Field values are validated against app/services/client_intake.py's INTAKE_SCRIPT chip values by app/eval/goldens.py::load_profiles(), unless the field is listed in free_text_fields. Regenerated for intake script v2: `goal` -> `objective`, `horizon` -> `timeframe`, `history` -> `asset_channel`. Regenerated for intake script v3: adds `own_commerce`, chosen to be coherent with each profile's asset_channel. Every P01* variant and every P11-P13 free-text profile inherits the P01 spine's own_commerce, so each still differs from the spine by exactly one field. own_commerce is a solution trigger, not a scoring dimension, so it cannot move a case-match metric (see client_intake.match_query_fields). P01-P09 cover one industry chip each (required by test_eval_goldens); P01b-P01g vary the P01 spine by exactly one field so a ranking diff is attributable.",
   "profiles": [
     {
-      "id": "P01-cafe-expand",
-      "label_th": "คาเฟ่ที่กำลังจะขยายสาขา",
+      "id": "P01-beauty-awareness",
+      "label_th": "แบรนด์ความงามที่โตแล้วแต่คนยังไม่รู้จัก",
       "note": "The spine profile every P01* contrast pair below varies from in exactly one field.",
       "free_text_fields": [],
       "fields": {
-        "industry": "Food & beverage / café",
+        "industry": "Beauty / skincare / cosmetics",
         "stage": "Growing, ready to expand",
-        "audience": "Urban working adults",
+        "audience": "Working adults / first jobbers",
         "challenge": "Low brand awareness",
-        "goal": "Grow sales / expand",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "One freelance logo project"
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
-      "id": "P02-retail-online",
-      "label_th": "ร้านค้าปลีกที่เพิ่งเปิดขายออนไลน์",
+      "id": "P02-supplement-conversion",
+      "label_th": "แบรนด์อาหารเสริมเปิดใหม่ ยอดขายโตช้า",
       "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Retail + online",
+        "industry": "Health / supplements",
         "stage": "Under 1 year old",
-        "audience": "Students",
-        "challenge": "Online channels underperforming",
-        "goal": "Build brand awareness",
-        "horizon": "3 months",
-        "budget": "Under ฿300,000",
-        "history": "None"
+        "audience": "Families / adults 35+",
+        "challenge": "Slow sales or conversion growth",
+        "own_commerce": "Heavy - mostly marketplace / delivery / platform, high GP",
+        "asset_channel": "Marketplace / e-commerce",
+        "objective": "Grow sales / acquire new customers",
+        "timeframe": "Urgent - within 1-3 months",
+        "budget": "Under ฿300,000"
       }
     },
     {
-      "id": "P03-b2b-services",
-      "label_th": "ธุรกิจบริการ B2B ยอดนิ่ง",
+      "id": "P03-fnb-engagement",
+      "label_th": "ร้านอาหาร/เครื่องดื่มที่คอนเทนต์ยังไม่สร้าง Impact",
       "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Services / B2B",
-        "stage": "Established, flat revenue",
+        "industry": "Food & beverage / restaurant / delivery",
+        "stage": "Growing, ready to expand",
+        "audience": "Gen Z / students",
+        "challenge": "Social / content / engagement lacks impact",
+        "own_commerce": "Mixed - own channels plus external platforms",
+        "asset_channel": "Storefront / events / offline touchpoints",
+        "objective": "Build engagement / community / fandom",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
+      }
+    },
+    {
+      "id": "P04-retail-retention",
+      "label_th": "ค้าปลีก/FMCG ยอดนิ่ง ซื้อซ้ำต่ำ",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Retail / e-commerce / FMCG",
+        "stage": "Established, flat or slow growth",
+        "audience": "Mass market / multiple segments",
+        "challenge": "Low repeat purchase / weak CRM",
+        "own_commerce": "Mixed - own channels plus external platforms",
+        "asset_channel": "Multiple channels with siloed data",
+        "objective": "Increase repeat purchase / CRM / loyalty",
+        "timeframe": "6-12 months",
+        "budget": "฿800,000 - 1,500,000"
+      }
+    },
+    {
+      "id": "P05-tech-leadgen",
+      "label_th": "แอป/ดิจิทัลเซอร์วิสที่แคมเปญไม่ได้ Data กลับมา",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Application / tech / digital service",
+        "stage": "Under 1 year old",
+        "audience": "Working adults / first jobbers",
+        "challenge": "Campaigns capture no data",
+        "own_commerce": "Light - mostly the brand own channels",
+        "asset_channel": "Website / e-commerce plus social",
+        "objective": "Capture leads / first-party data",
+        "timeframe": "Urgent - within 1-3 months",
+        "budget": "฿300,000 - 800,000"
+      }
+    },
+    {
+      "id": "P06-media-fandom",
+      "label_th": "สื่อ/บันเทิงที่อยากสร้างคอมมูนิตี้",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Entertainment / media",
+        "stage": "Growing, ready to expand",
+        "audience": "Fandom / community",
+        "challenge": "Social / content / engagement lacks impact",
+        "own_commerce": "Not applicable to my business",
+        "asset_channel": "Mainly social media",
+        "objective": "Build engagement / community / fandom",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
+      }
+    },
+    {
+      "id": "P07-automotive-reposition",
+      "label_th": "แบรนด์ยานยนต์ระดับ Enterprise ที่ต้องการ Reposition",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Automotive",
+        "stage": "Enterprise / regional expansion",
+        "audience": "Families / adults 35+",
+        "challenge": "Weak differentiation / unclear positioning",
+        "own_commerce": "Light - mostly the brand own channels",
+        "asset_channel": "Existing customer database / CRM",
+        "objective": "Reposition / premiumization",
+        "timeframe": "6-12 months",
+        "budget": "฿1,500,000+"
+      }
+    },
+    {
+      "id": "P08-b2b-awareness",
+      "label_th": "ธุรกิจบริการ B2B ยอดนิ่ง ยังไม่มีฐานลูกค้าของตัวเอง",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "B2B / service",
+        "stage": "Established, flat or slow growth",
         "audience": "Business customers (B2B)",
-        "challenge": "Hard to differentiate from competitors",
-        "goal": "Full brand refresh",
-        "horizon": "12 months",
-        "budget": "฿800,000 - 1,200,000",
-        "history": "In-house team"
+        "challenge": "Low brand awareness",
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "No owned customer base yet",
+        "objective": "Capture leads / first-party data",
+        "timeframe": "Flexible",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
-      "id": "P04-beauty-wellness",
-      "label_th": "แบรนด์ความงามที่กำลังจะออกสินค้าใหม่",
+      "id": "P09-hospitality-launch",
+      "label_th": "โรงแรม/ท่องเที่ยวที่ยังไม่เปิดตัว",
       "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Beauty / health & wellness",
-        "stage": "Growing, ready to expand",
-        "audience": "Families & neighbourhood",
-        "challenge": "Thin margins",
-        "goal": "Launch a new product / service",
-        "horizon": "6 months",
-        "budget": "฿1,200,000+",
-        "history": "Worked with an agency before"
-      }
-    },
-    {
-      "id": "P05-tourism-hotel",
-      "label_th": "โรงแรมที่ยังไม่เปิดตัว",
-      "note": "",
-      "free_text_fields": [],
-      "fields": {
-        "industry": "Tourism / hospitality",
+        "industry": "Property / travel / hospitality",
         "stage": "Pre-launch",
-        "audience": "Tourists / foreigners",
-        "challenge": "Low brand awareness",
-        "goal": "Build brand awareness",
-        "horizon": "3 months",
-        "budget": "Not sure - needs guidance",
-        "history": "None"
+        "audience": "Tourists / overseas markets",
+        "challenge": "Need to launch a product / enter a new market",
+        "own_commerce": "Mixed - own channels plus external platforms",
+        "asset_channel": "LINE OA without real CRM / data capture",
+        "objective": "Launch a product / new campaign",
+        "timeframe": "3-6 months",
+        "budget": "฿800,000 - 1,500,000"
       }
     },
     {
-      "id": "P06-other-chip-literal",
-      "label_th": "เลือกชิป \"อื่น ๆ\" โดยไม่มีข้อความเพิ่มเติม",
-      "note": "Deliberate edge case: the intake UI's 'Other (typed)' chip is meant to be followed by free text, but this profile stores the literal chip value with none — testing what the query/retrieval does with a non-informative industry token (\"Business: Other (typed)\"). Compare against the P11-P13 free-text profiles, which supply real Thai text instead.",
-      "free_text_fields": [],
-      "fields": {
-        "industry": "Other (typed)",
-        "stage": "Growing, ready to expand",
-        "audience": "Urban working adults",
-        "challenge": "Flat / slow sales growth",
-        "goal": "Grow sales / expand",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "One freelance logo project"
-      }
-    },
-    {
-      "id": "P01b-goal-differs",
+      "id": "P01b-objective-differs",
       "label_th": "เหมือน P01 แต่เป้าหมายต่างกัน",
-      "note": "Contrast pair vs P01 — differs ONLY in goal. Used for the Kendall-tau sensitivity check: if the ranking barely moves, the 'goal' question isn't earning its place in the funnel.",
+      "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Food & beverage / café",
+        "industry": "Beauty / skincare / cosmetics",
         "stage": "Growing, ready to expand",
-        "audience": "Urban working adults",
+        "audience": "Working adults / first jobbers",
         "challenge": "Low brand awareness",
-        "goal": "Build brand awareness",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "One freelance logo project"
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Grow sales / acquire new customers",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
       "id": "P01c-challenge-differs",
       "label_th": "เหมือน P01 แต่ปัญหาต่างกัน",
-      "note": "Contrast pair vs P01 — differs ONLY in challenge.",
+      "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Food & beverage / café",
+        "industry": "Beauty / skincare / cosmetics",
         "stage": "Growing, ready to expand",
-        "audience": "Urban working adults",
-        "challenge": "Hard to differentiate from competitors",
-        "goal": "Grow sales / expand",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "One freelance logo project"
+        "audience": "Working adults / first jobbers",
+        "challenge": "Low repeat purchase / weak CRM",
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
       "id": "P01d-budget-differs",
       "label_th": "เหมือน P01 แต่งบต่างกัน",
-      "note": "Contrast pair vs P01 — differs ONLY in budget.",
+      "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Food & beverage / café",
+        "industry": "Beauty / skincare / cosmetics",
         "stage": "Growing, ready to expand",
-        "audience": "Urban working adults",
+        "audience": "Working adults / first jobbers",
         "challenge": "Low brand awareness",
-        "goal": "Grow sales / expand",
-        "horizon": "6 months",
-        "budget": "฿1,200,000+",
-        "history": "One freelance logo project"
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿1,500,000+"
       }
     },
     {
       "id": "P01e-stage-differs",
       "label_th": "เหมือน P01 แต่ระยะธุรกิจต่างกัน",
-      "note": "Contrast pair vs P01 — differs ONLY in stage.",
+      "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Food & beverage / café",
+        "industry": "Beauty / skincare / cosmetics",
         "stage": "Pre-launch",
-        "audience": "Urban working adults",
+        "audience": "Working adults / first jobbers",
         "challenge": "Low brand awareness",
-        "goal": "Grow sales / expand",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "One freelance logo project"
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
       "id": "P01f-audience-differs",
       "label_th": "เหมือน P01 แต่กลุ่มลูกค้าต่างกัน",
-      "note": "Contrast pair vs P01 — differs ONLY in audience.",
+      "note": "",
       "free_text_fields": [],
       "fields": {
-        "industry": "Food & beverage / café",
+        "industry": "Beauty / skincare / cosmetics",
         "stage": "Growing, ready to expand",
-        "audience": "Business customers (B2B)",
+        "audience": "Gen Z / students",
         "challenge": "Low brand awareness",
-        "goal": "Grow sales / expand",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "One freelance logo project"
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
+      }
+    },
+    {
+      "id": "P01g-channel-differs",
+      "label_th": "เหมือน P01 แต่ช่องทางที่มีอยู่ต่างกัน",
+      "note": "",
+      "free_text_fields": [],
+      "fields": {
+        "industry": "Beauty / skincare / cosmetics",
+        "stage": "Growing, ready to expand",
+        "audience": "Working adults / first jobbers",
+        "challenge": "Low brand awareness",
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Existing customer database / CRM",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
       "id": "P11-freetext-cosmetics",
       "label_th": "ร้านขายเครื่องสำอางออนไลน์ (พิมพ์เอง)",
-      "note": "Tests the free-text intake path with real Thai prose, plus the largest untested assumption in the product: the query is built from English chip labels/values, but the corpus narrative is Thai.",
-      "free_text_fields": ["industry"],
+      "note": "",
+      "free_text_fields": [
+        "industry"
+      ],
       "fields": {
-        "industry": "ร้านขายเครื่องสำอางออนไลน์ อยากทำแบรนด์ให้ดูพรีเมียม",
+        "industry": "ขายเครื่องสำอางแบรนด์ตัวเองผ่าน Shopee และ TikTok Shop",
         "stage": "Growing, ready to expand",
-        "audience": "Urban working adults",
-        "challenge": "Hard to differentiate from competitors",
-        "goal": "Full brand refresh",
-        "horizon": "6 months",
-        "budget": "฿300,000 - 800,000",
-        "history": "None"
+        "audience": "Working adults / first jobbers",
+        "challenge": "Low brand awareness",
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
       "id": "P12-freetext-tech-services",
       "label_th": "บริษัทรับทำเว็บ/แอปสำหรับ SME (พิมพ์เอง)",
-      "note": "Free-text industry, B2B services flavour distinct from the P03 chip-based profile.",
-      "free_text_fields": ["industry"],
+      "note": "",
+      "free_text_fields": [
+        "industry"
+      ],
       "fields": {
-        "industry": "บริษัทรับทำเว็บไซต์และแอพพลิเคชันสำหรับธุรกิจ SME",
-        "stage": "Established, flat revenue",
-        "audience": "Business customers (B2B)",
-        "challenge": "Flat / slow sales growth",
-        "goal": "Grow sales / expand",
-        "horizon": "12 months",
-        "budget": "Not sure - needs guidance",
-        "history": "In-house team"
+        "industry": "รับพัฒนาเว็บไซต์และแอปพลิเคชันให้ธุรกิจ SME",
+        "stage": "Growing, ready to expand",
+        "audience": "Working adults / first jobbers",
+        "challenge": "Low brand awareness",
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     },
     {
       "id": "P13-freetext-fitness",
       "label_th": "สตูดิโอโยคะสำหรับผู้หญิงวัยทำงาน (พิมพ์เอง)",
-      "note": "Free-text industry, new-business flavour distinct from the P05 chip-based profile.",
-      "free_text_fields": ["industry"],
+      "note": "",
+      "free_text_fields": [
+        "industry"
+      ],
       "fields": {
-        "industry": "สตูดิโอโยคะและฟิตเนสสำหรับผู้หญิงวัยทำงาน",
-        "stage": "Under 1 year old",
-        "audience": "Urban working adults",
+        "industry": "สตูดิโอโยคะและพิลาทิสสำหรับผู้หญิงวัยทำงาน",
+        "stage": "Growing, ready to expand",
+        "audience": "Working adults / first jobbers",
         "challenge": "Low brand awareness",
-        "goal": "Build brand awareness",
-        "horizon": "3 months",
-        "budget": "Under ฿300,000",
-        "history": "None"
+        "own_commerce": "No owned sales channel yet",
+        "asset_channel": "Mainly social media",
+        "objective": "Build brand awareness",
+        "timeframe": "3-6 months",
+        "budget": "฿300,000 - 800,000"
       }
     }
   ]

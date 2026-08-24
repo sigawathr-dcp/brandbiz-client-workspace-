@@ -14,7 +14,11 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock
 
+import pytest
+
+from app.llm.embeddings import EmbeddingError
 from app.models.user import User
+from app.tools import rag_search as rag_search_module
 from app.tools.rag_search import _scope_filter, retrieve
 
 
@@ -125,4 +129,35 @@ class TestRetrieveEvalKnobs:
         # embedder, so strict=True must not raise here.
         user = _make_user()
         result = await retrieve(session=MagicMock(), user=user, query="   ", strict=True)
+        assert result == []
+
+
+class TestRetrieveStrictEmbedFailure:
+    """Regression guard for case matching (app/routers/client.py's
+    run_case_match): an embed-server outage must surface as EmbeddingError
+    when strict=True, not degrade to an empty result. The default
+    strict=False degradation (see TestRetrieveEvalKnobs above) is correct
+    for chat, which falls back to a non-RAG answer — but silently returning
+    [] for case matching is indistinguishable from "no case studies matched
+    closely enough", which is a different, false, statement."""
+
+    class _FailingEmbedder:
+        async def embed_one(self, text: str) -> list[float]:
+            raise EmbeddingError("embedding server unreachable")
+
+    def _patch_failing_embedder(self, monkeypatch):
+        monkeypatch.setattr(rag_search_module, "get_embedder", lambda: self._FailingEmbedder())
+
+    async def test_strict_true_reraises_embedding_error(self, monkeypatch):
+        self._patch_failing_embedder(monkeypatch)
+        user = _make_user()
+
+        with pytest.raises(EmbeddingError):
+            await retrieve(session=MagicMock(), user=user, query="grab thailand app", strict=True)
+
+    async def test_strict_false_degrades_to_empty_list(self, monkeypatch):
+        self._patch_failing_embedder(monkeypatch)
+        user = _make_user()
+
+        result = await retrieve(session=MagicMock(), user=user, query="grab thailand app", strict=False)
         assert result == []
