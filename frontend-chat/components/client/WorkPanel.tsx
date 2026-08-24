@@ -16,12 +16,23 @@ export type WorkTab = 'profile' | 'research' | 'cases'
 // exactly like the original intake answer did (client_intake.resolve_answer).
 interface PendingEdit {
   option_index?: number
+  // Multi-select fields (IntakeField.multi_select) collect every toggled
+  // chip here instead of replacing option_index on each tap.
+  option_indices?: number[]
   free_text?: string
   label: string
 }
 
 // One correction as PATCH /client/intake/fields takes it (IntakeEditIn).
-type ProfileUpdate = { field: string; option_index?: number; free_text?: string }
+type ProfileUpdate = { field: string; option_index?: number; option_indices?: number[]; free_text?: string }
+
+// How the server joins a multi-select answer into one stored string
+// (client_intake.ANSWER_JOINER) — split on it to find which chips are current.
+const ANSWER_JOINER = '; '
+
+function sameSet(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((i) => b.includes(i))
+}
 
 // Client Workspaces (Phase 5, D21/D22) — the right-hand work panel: Profile
 // fills in live as intake answers land, Research/Cases show once those
@@ -83,8 +94,42 @@ export default function WorkPanel({
   const [editMode, setEditMode] = useState(false)
   const [pending, setPending] = useState<Record<string, PendingEdit>>({})
 
-  function pickChip(fieldKey: string, index: number, label: string) {
-    setPending((prev) => ({ ...prev, [fieldKey]: { option_index: index, label } }))
+  // Which chips are the saved answer for a field. A multi-select answer is
+  // stored joined with ANSWER_JOINER, so it can match several chips; a
+  // single-select answer matches at most one. Matched on `value` (what the
+  // server stores) with the Thai `label` only as a fallback for an older
+  // payload. Empty for a free-text answer that matches no chip.
+  function currentIndicesOf(field: IntakeField): number[] {
+    const current = fields[field.key] || ''
+    if (!current) return []
+    const parts = field.multi_select ? current.split(ANSWER_JOINER) : [current]
+    return field.options.filter((o) => parts.includes(o.value ?? o.label)).map((o) => o.index)
+  }
+
+  function pickChip(field: IntakeField, option: { index: number; label: string }) {
+    if (field.multi_select) {
+      // Toggle the chip in/out of the pending set; the row's preview label
+      // joins the picked labels the same way the server will ("; "). The
+      // first tap starts from the saved set, so it adds/removes one chip
+      // instead of silently dropping every other current answer.
+      setPending((prev) => {
+        const current = prev[field.key]?.option_indices ?? currentIndicesOf(field)
+        const next = current.includes(option.index)
+          ? current.filter((i) => i !== option.index)
+          : [...current, option.index].sort((a, b) => a - b)
+        if (next.length === 0) {
+          const { [field.key]: _dropped, ...rest } = prev
+          return rest
+        }
+        const label = field.options
+          .filter((o) => next.includes(o.index))
+          .map((o) => o.label)
+          .join('; ')
+        return { ...prev, [field.key]: { option_indices: next, label } }
+      })
+      return
+    }
+    setPending((prev) => ({ ...prev, [field.key]: { option_index: option.index, label: option.label } }))
   }
   function typeFreeText(fieldKey: string, text: string) {
     setPending((prev) => ({ ...prev, [fieldKey]: { free_text: text, label: text } }))
@@ -101,8 +146,16 @@ export default function WorkPanel({
   function effectiveUpdates(): ProfileUpdate[] {
     return Object.entries(pending).flatMap(([field, v]): ProfileUpdate[] => {
       const current = fields[field] || ''
+      const def = intakeFields.find((f) => f.key === field)
+      if (v.option_indices !== undefined) {
+        if (v.option_indices.length === 0) return []
+        // Same set as what is saved (in any order) stores the same joined
+        // value — resolve_answers() sorts by ordinal, so compare as a set.
+        if (def && sameSet(v.option_indices, currentIndicesOf(def))) return []
+        return [{ field, option_indices: v.option_indices }]
+      }
       if (v.option_index !== undefined) {
-        const opt = intakeFields.find((f) => f.key === field)?.options.find((o) => o.index === v.option_index)
+        const opt = def?.options.find((o) => o.index === v.option_index)
         // `value` is what the server stores for that chip; `label` is only a
         // fallback for an older payload that predates it.
         const resolved = opt?.value ?? opt?.label ?? ''
@@ -212,7 +265,7 @@ export default function WorkPanel({
                 <span style={{ display: 'inline-flex', color: 'var(--accent)' }}>
                   <Ic.check size={11} strokeWidth={2} />
                 </span>
-                marks your current answer — tap another chip to replace it.
+                marks your current answer — tap another chip to replace it (or toggle chips on a multi-choice question).
               </div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -226,28 +279,33 @@ export default function WorkPanel({
                 const answered = idx < intakeStep
                 const edit = pending[f.key]
                 const current = fields[f.key] || ''
-                // Which chip is the saved answer, so edit mode can keep it
+                // Which chips are the saved answer, so edit mode can keep them
                 // marked. Every option used to render identically once edit
                 // mode opened, so a mis-tap was invisible — you couldn't see
-                // what you were about to overwrite. Matched on `value` (what
-                // the server stores) with the Thai `label` only as a fallback
-                // for a free-text answer or an older payload.
-                const currentIndex = current
-                  ? f.options.findIndex((o) => (o.value ?? o.label) === current)
-                  : -1
+                // what you were about to overwrite. One index for a single-
+                // select field, several for a multi-select one.
+                const currentIndices = currentIndicesOf(f)
+                // The chips a pending edit has picked, in either shape;
+                // undefined while the pending entry is free text (or absent).
+                const pendingIndices =
+                  edit?.option_indices !== undefined
+                    ? edit.option_indices
+                    : edit?.option_index !== undefined
+                      ? [edit.option_index]
+                      : undefined
                 // A pending edit only counts as a change once it has text —
                 // an emptied free-text box is not yet a new answer. Re-tapping
-                // the chip that is already the answer isn't one either: its
-                // Thai label never equals the stored English value, so without
-                // this the row would show a bogus "old → new".
+                // the chip(s) that already are the answer isn't one either:
+                // the Thai label never equals the stored English value, so
+                // without this the row would show a bogus "old → new".
                 const nextLabel = (edit?.label ?? '').trim()
-                const reAffirmed = edit?.option_index !== undefined && edit.option_index === currentIndex
+                const reAffirmed = pendingIndices !== undefined && sameSet(pendingIndices, currentIndices)
                 const changed = !!nextLabel && !!current && !reAffirmed && nextLabel !== current
                 const freeText = (edit?.free_text ?? '').trim()
                 const freeTextChanged = !!freeText && freeText !== current
                 // An answer that matches no chip was typed — the input is
                 // where its "current" marker has to live.
-                const freeTextIsCurrent = currentIndex < 0 && !!current
+                const freeTextIsCurrent = currentIndices.length === 0 && !!current
                 return (
                   <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -281,21 +339,25 @@ export default function WorkPanel({
                           // Stays marked even while another chip is picked —
                           // seeing the answer you are replacing is the whole
                           // point of the marker.
-                          const isCurrent = o.index === currentIndex
+                          const isCurrent = currentIndices.includes(o.index)
+                          const pickedNow = pendingIndices?.includes(o.index) ?? false
                           // Three accent states, no grey: an answer that is
                           // already chosen reads as chosen.
                           //   current      — accent tint + ✓ (what is saved)
                           //   replacement  — solid accent (what Save will store)
-                          //   superseded   — the current one, faded, once a
-                          //                  different chip or free text is in
-                          const replacement = edit?.option_index === o.index && !isCurrent
+                          //   superseded   — a current one, faded, once it is
+                          //                  no longer in the pending pick (or
+                          //                  free text replaces the answer)
+                          // On a multi-select field the pending pick is a set,
+                          // so a current chip only fades when toggled out.
+                          const replacement = pickedNow && !isCurrent
                           const superseded =
-                            isCurrent && ((edit?.option_index !== undefined && !reAffirmed) || freeTextChanged)
+                            isCurrent && ((pendingIndices !== undefined && !pickedNow) || freeTextChanged)
                           const selected = isCurrent || replacement
                           return (
                             <button
                               key={o.index}
-                              onClick={() => pickChip(f.key, o.index, o.label)}
+                              onClick={() => pickChip(f, o)}
                               aria-pressed={selected && !superseded}
                               title={isCurrent ? 'Your current answer' : undefined}
                               style={{

@@ -2633,3 +2633,72 @@ uuid4, relying on the unique index rather than determinism for retry-safety.
 - [ ] Carried: long-tail backlog (ground-truth labels for case-match eval; placeholder rate card;
       prompt-injection pass; secrets rotation decision; `COOKIE_SECURE`+TLS; server-spec.md deck-heading
       confirmation; `production_improvement.md` gaps #18–25; `docs/gap-closure.md`'s remaining G-tasks)
+
+## 2026-08-24 18:25 — main @ b465692
+
+**Summary:** Made the six scoring questions of the intake interview (Q1 industry, Q2 stage,
+Q3 audience, Q4 challenge, Q6 asset_channel, Q7 objective) multi-select end to end, per the user's
+request; own_commerce/timeframe/budget stay single-pick. A multi answer stores one `intake_answers`
+row per picked chip (migration 0064 adds `intake_questions.multi_select`, backfills the six fields
+on every script version, and splits 0053's one-live-answer-per-field unique index into
+chip-row/free-text variants), travels the API as `option_indices` (with `option_index` kept
+compatible), displays as values joined by `"; "` (`ANSWER_JOINER`), and scores as the MEAN of
+per-token credit per dimension (`case_score`), with the solution trigger reading token sets.
+Frontend: IntakeChips gained a toggle-and-confirm multi mode ("เลือกได้มากกว่า 1 ข้อ" hint,
+"ยืนยันคำตอบ (N)" button, number keys toggle, Enter confirms) and the Profile tab's edit mode
+toggles chips on multi fields. 96 touched-area unit tests pass (13 new), `tsc --noEmit` clean; the
+Docker stack was rebuilt and the DB verified at head `0064` with the six flags set and the new
+partial indexes in place. Not committed.
+
+**Files changed:**
+- `backend/alembic/versions/0064_intake_multi_select.py` — new: multi_select column + backfill; live-answer index split
+- `backend/app/services/client_intake.py` — `multi_select` per step, `ANSWER_JOINER`/split/join helpers, `resolve_answers()`, `option_ids_at_db()`, manifest/step_at include the flag
+- `backend/app/models/intake.py` — `IntakeQuestion.multi_select` column
+- `backend/app/routers/client.py` — `option_indices` in answer/edit schemas, multi-row `_record_answer`, grouped `_load_fields`/`_load_fields_th`/`_intake_transcript`, `multi_select` on CurrentStepOut/IntakeFieldOut
+- `backend/app/services/case_score.py` — client tags are token sets; mean per-token dimension credit (exact/adjacent per token)
+- `backend/app/services/solution_trigger.py` — splits multi asset_channel/objective values; first-specific build message, strongest-signal stance
+- `frontend-chat/components/client/IntakeChips.tsx` — multi-select toggle mode with confirm row
+- `frontend-chat/components/client/ClientWorkspace.tsx` — `handlePickChips` sends `option_indices`, echoes "; "-joined labels
+- `frontend-chat/components/client/WorkPanel.tsx` — Profile edit mode toggles chips on multi fields (`option_indices` pending edits)
+- `frontend-chat/components/client/types.ts` — `multi_select` on CurrentStep/IntakeField
+- `backend/tests/unit/test_client_intake.py` — multi_select shape guards, joiner guard, `resolve_answers` tests
+- `backend/tests/unit/test_case_score.py` — multi-token client scoring tests; token-set expectations
+- `backend/tests/unit/test_solution_trigger.py` — multi-valued asset/objective tests
+- `backend/tests/unit/test_client_router_intake_edit.py` — resolver mock updated to option_ids list
+
+**Next steps:**
+- [x] Run `alembic upgrade head` against a real database — backend restart this session applied 0063 AND the new 0064; verified `alembic_version = 0064_intake_multi_select`
+- [ ] New: browser click-through of a multi-select interview (booth flow + Profile-tab multi edit + transcript replay after reload)
+- [ ] New: commit this session's multi-select work (14 files, uncommitted)
+- [ ] New: eval harness/goldens still build single-token profiles — add multi-answer profiles to the case-match eval once labels exist
+- [ ] Carried: reconcile with `line_plan.md` before committing — shared vs per-user workspace, auto-consent vs explicit tick, CDN vs `@line/liff`, route/service naming
+- [ ] Carried: run the integration suite on a host with Docker — LINE tests and the funnel test (now also covering multi-select-compatible paths) have never executed
+- [ ] Carried: create the LINE Login / MINI App channel + LIFF app and set the three env vars; same provider as any future Messaging API channel
+- [ ] Carried: LIFF needs public HTTPS — tunnel to 3100 for dev; decide prod host
+- [ ] Carried: `line_plan.md` Phase D, Phase E, and B6 are unbuilt
+- [ ] Carried: decide the admin `/clients` invite UI's fate now that invites are break-glass only
+- [ ] Carried: `line_plan.md` / `data_storage_plan.md` untracked at repo root — commit or delete
+- [ ] Carried: `RedeemInvite.tsx`'s hardcoded "น้องภูมิ" loading copy duplicated in `LineLogin.tsx`
+- [ ] Carried: tag the five judgement dimensions (`tag_case_studies.py --narrative`, `--coverage`, `seed_case_tags.py --apply`)
+- [ ] Carried: confirm the Q4-Challenge / Q6-Objective overlap is wanted
+- [ ] Carried: review the two low-confidence (0.60) secondary industry tags; decide GrabMart's
+- [ ] Carried: sweep `case_match_tag_weight` in the eval harness once labels exist
+- [ ] Carried: rebuild + one live chat turn against a seat with a saved plan
+- [ ] Carried: decide whether `/w/plans/[id]` gets its own chat box
+- [ ] Carried: chat context covers the plan only — intake/market scan/cases invisible outside the 20-message window
+- [ ] Carried: browser click-through of the Profile tab's failure path — needs a real login session
+- [ ] Carried: case-match embed host unreachable — reconnect to `192.168.20.0/24` or its VPN
+- [ ] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `.env.example`/`docker-compose.yml`'s `bge-m3:latest`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key; verify gitignored, consider rotating
+- [ ] Carried: no live browser click-through of the redesigned funnel
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler for `purge_expired_messages.py`
+- [ ] Carried: gap-closure plan Commits 2–4 (user-preferences endpoint, G-A4 Prompt Assistant, G-A3 Arena)
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: G-I1 Thai/English switch not built
+- [ ] Carried: `plan_versions` missing `UNIQUE(plan_id, version_no)`
+- [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` columns; 3 index-naming mismatches
+- [ ] Carried: `0051`/`0054`/`0055`/`0057` backfills lack defensive checks for unresolvable rows
+- [ ] Carried: long-tail backlog (ground-truth labels; placeholder rate card; prompt-injection pass; secrets rotation; `COOKIE_SECURE`+TLS; server-spec.md deck headings; `production_improvement.md` #18–25; remaining G-tasks)

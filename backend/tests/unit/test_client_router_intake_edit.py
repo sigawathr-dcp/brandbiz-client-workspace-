@@ -71,7 +71,7 @@ def _patches(
     rate_check = MagicMock()  # rate_limit_svc.check is sync
 
     resolve = AsyncMock(
-        return_value=({"field": "industry"}, resolved_value, uuid.uuid4(), uuid.uuid4(), "chip")
+        return_value=({"field": "industry"}, resolved_value, uuid.uuid4(), [uuid.uuid4()], "chip")
     )
 
     cms = [

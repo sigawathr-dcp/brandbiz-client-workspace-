@@ -152,3 +152,33 @@ class TestDirectiveIsShaded:
     def test_unknown_objective_still_produces_a_sized_directive(self):
         (t,) = solution_trigger.evaluate(_fields(own_commerce=HEAVY))
         assert "distinct workstream" in t.directive
+
+
+class TestMultiSelectAnswers:
+    """asset_channel and objective may be multi-select answers — stored as
+    one joined string (client_intake.ANSWER_JOINER)."""
+
+    def test_first_specific_asset_answer_shapes_the_build(self):
+        (t,) = solution_trigger.evaluate(
+            _fields(own_commerce=HEAVY, asset_channel=f"{LINE_OA}; {HAS_CRM}")
+        )
+        # LINE OA comes first in the stored (ordinal) order → its build wins.
+        assert "LINE Microsite" in t.directive
+
+    def test_any_aligned_objective_makes_it_lead(self):
+        # Awareness picked ALONGSIDE first-party data: the data objective is
+        # the stronger signal and owned commerce still leads.
+        (t,) = solution_trigger.evaluate(
+            _fields(
+                own_commerce=HEAVY,
+                asset_channel=LINE_OA,
+                objective=f"{OBJ_AWARENESS}; {OBJ_LEAD_DATA}",
+            )
+        )
+        assert "leading workstream" in t.directive
+
+    def test_reason_records_every_token(self):
+        (t,) = solution_trigger.evaluate(
+            _fields(own_commerce=HEAVY, asset_channel=f"{LINE_OA}; {HAS_CRM}")
+        )
+        assert "asset_channel=line_oa_no_crm+has_crm" in t.reason

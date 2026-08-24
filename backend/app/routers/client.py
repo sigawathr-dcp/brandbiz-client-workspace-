@@ -108,28 +108,48 @@ _logger = logging.getLogger(__name__)
 # Intake-answer helpers
 # ---------------------------------------------------------------------------
 
+async def _load_field_values(
+    session: AsyncSession, step1: EngagementStep, *, thai_labels: bool
+) -> dict[str, list[str]]:
+    """The seat's live (non-superseded) intake answers as {field_key:
+    [value, ...]} — usually one value, several when the question was
+    multi-select. Chip rows resolve through IntakeOption and come back in
+    ordinal order (the same order resolve_answers() stored them in), so a
+    profile renders identically regardless of click order; free text is
+    decrypted."""
+    rows = (
+        await session.execute(
+            select(IntakeAnswer, IntakeOption)
+            .outerjoin(IntakeOption, IntakeOption.id == IntakeAnswer.option_id)
+            .where(
+                IntakeAnswer.engagement_step_id == step1.id, IntakeAnswer.superseded_at.is_(None)
+            )
+            .order_by(IntakeOption.ordinal)
+        )
+    ).all()
+
+    fields: dict[str, list[str]] = {}
+    for answer, option in rows:
+        if option is not None:
+            value = option.label if thai_labels else option.value
+        else:
+            value = crypto.decrypt(
+                answer.value_ciphertext, answer.value_nonce, answer.value_tag, answer.key_version
+            )
+        fields.setdefault(answer.field_key, []).append(value)
+    return fields
+
+
 async def _load_fields(session: AsyncSession, step1: EngagementStep) -> dict[str, str]:
     """Read the seat's live (non-superseded) intake answers as
     {field_key: display_value} — a chip pick resolves through its
-    IntakeOption.value; free text is decrypted."""
-    rows = (
-        await session.execute(
-            select(IntakeAnswer).where(
-                IntakeAnswer.engagement_step_id == step1.id, IntakeAnswer.superseded_at.is_(None)
-            )
-        )
-    ).scalars().all()
-
-    fields: dict[str, str] = {}
-    for row in rows:
-        if row.option_id is not None:
-            value = (
-                await session.execute(select(IntakeOption.value).where(IntakeOption.id == row.option_id))
-            ).scalar_one()
-        else:
-            value = crypto.decrypt(row.value_ciphertext, row.value_nonce, row.value_tag, row.key_version)
-        fields[row.field_key] = value
-    return fields
+    IntakeOption.value; free text is decrypted. A multi-select answer joins
+    its values with client_intake.ANSWER_JOINER ("; "), which every consumer
+    of this dict (Profile tab, build_context_query's embedding string, the
+    drafting prompt) carries as-is; the scorer splits it back apart with
+    client_intake.split_answer_values()."""
+    values = await _load_field_values(session, step1, thai_labels=False)
+    return {k: intake_svc.join_answer_values(v) for k, v in values.items()}
 
 
 async def _load_fields_th(session: AsyncSession, step1: EngagementStep) -> dict[str, str]:
@@ -145,25 +165,8 @@ async def _load_fields_th(session: AsyncSession, step1: EngagementStep) -> dict[
     Reads labels off the engagement's own intake_script_id via the option row,
     so a republished script never retranslates an in-flight engagement.
     """
-    rows = (
-        await session.execute(
-            select(IntakeAnswer).where(
-                IntakeAnswer.engagement_step_id == step1.id, IntakeAnswer.superseded_at.is_(None)
-            )
-        )
-    ).scalars().all()
-
-    fields: dict[str, str] = {}
-    for row in rows:
-        if row.option_id is not None:
-            value = (
-                await session.execute(select(IntakeOption.label).where(IntakeOption.id == row.option_id))
-            ).scalar_one()
-        else:
-            # Free text is whatever the client typed — already Thai prose in practice.
-            value = crypto.decrypt(row.value_ciphertext, row.value_nonce, row.value_tag, row.key_version)
-        fields[row.field_key] = value
-    return fields
+    values = await _load_field_values(session, step1, thai_labels=True)
+    return {k: intake_svc.join_answer_values(v) for k, v in values.items()}
 
 
 async def _record_answer(
@@ -172,11 +175,14 @@ async def _record_answer(
     *,
     question_id: uuid.UUID,
     field_key: str,
-    option_id: uuid.UUID | None,
+    option_ids: list[uuid.UUID],
     free_text_value: str | None,
     source: str,
 ) -> None:
     """Supersede any live answer for this field, then insert the new one —
+    one row per picked chip (several on a multi-select question), or a
+    single encrypted free-text row. Superseding EVERY live row first is what
+    keeps a field's live answer all-chips or one-free-text, never a mix —
     append-only, so PATCH /client/intake/fields leaves real edit history
     behind instead of the old blob-overwrite (the intake_edited audit row
     only ever recorded {"field": name}, never old/new)."""
@@ -186,11 +192,12 @@ async def _record_answer(
                IntakeAnswer.superseded_at.is_(None))
         .values(superseded_at=datetime.now(timezone.utc))
     )
-    if option_id is not None:
-        session.add(IntakeAnswer(
-            engagement_step_id=step1.id, question_id=question_id, field_key=field_key,
-            option_id=option_id, source=source,
-        ))
+    if option_ids:
+        for option_id in option_ids:
+            session.add(IntakeAnswer(
+                engagement_step_id=step1.id, question_id=question_id, field_key=field_key,
+                option_id=option_id, source=source,
+            ))
     else:
         ct, nonce, tag, kv = crypto.encrypt(free_text_value or "")
         session.add(IntakeAnswer(
@@ -204,26 +211,32 @@ async def _resolve_answer_value(
     engagement: Engagement,
     index: int,
     *,
-    option_index: int | None,
+    option_indices: list[int] | None,
     free_text: str | None,
-) -> tuple[dict, str, uuid.UUID, uuid.UUID | None, str]:
+) -> tuple[dict, str, uuid.UUID, list[uuid.UUID], str]:
     """Resolve a chip/free-text answer against the script — no DB write.
-    Returns (step_def, resolved_value, question_id, option_id, source)."""
+    Returns (step_def, display_value, question_id, option_ids, source).
+    `display_value` is the joined value string (one value, or a
+    multi-select answer's values joined by client_intake.ANSWER_JOINER) —
+    the same shape _load_fields() reads back; `option_ids` is empty for
+    free text."""
     step_def = await intake_svc.step_at_db(session, engagement.intake_script_id, index)
     if step_def is None:
         raise HTTPException(status_code=400, detail="Unknown intake step")
     try:
-        value = intake_svc.resolve_answer(step_def, option_index=option_index, free_text=free_text)
+        values = intake_svc.resolve_answers(
+            step_def, option_indices=option_indices, free_text=free_text
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     question_id = await intake_svc.question_id_at_db(session, engagement.intake_script_id, index)
-    option_id = None
+    option_ids: list[uuid.UUID] = []
     source = "free_text"
-    if option_index is not None:
-        option_id = await intake_svc.option_id_at_db(session, question_id, option_index)
+    if option_indices:
+        option_ids = await intake_svc.option_ids_at_db(session, question_id, option_indices) or []
         source = "chip"
-    return step_def, value, question_id, option_id, source
+    return step_def, intake_svc.join_answer_values(values), question_id, option_ids, source
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +259,9 @@ class CurrentStepOut(BaseModel):
     field: str
     question: str
     options: list[ChipOut]
+    # True when IntakeChips should offer toggles + a confirm button (pick
+    # several) instead of answering on first tap.
+    multi_select: bool = False
 
 
 async def _current_step_out(session: AsyncSession, engagement: Engagement, step_index: int) -> CurrentStepOut | None:
@@ -256,6 +272,7 @@ async def _current_step_out(session: AsyncSession, engagement: Engagement, step_
         field=step_def["field"],
         question=step_def["question"],
         options=[ChipOut(index=i, label=o["label"]) for i, o in enumerate(step_def["options"])],
+        multi_select=bool(step_def.get("multi_select")),
     )
 
 
@@ -263,6 +280,7 @@ class IntakeFieldOut(BaseModel):
     key: str
     label: str
     options: list[ChipOut] = []
+    multi_select: bool = False
 
 
 class PlanSummaryOut(BaseModel):
@@ -333,7 +351,18 @@ class BootstrapOut(BaseModel):
 
 class IntakeAnswerIn(BaseModel):
     option_index: int | None = None
+    # Multi-select questions send every picked chip here; single-select
+    # callers may keep sending option_index (normalised to a one-item list
+    # by `indices`). Setting both is fine as long as they agree.
+    option_indices: list[int] | None = None
     free_text: str | None = None
+
+    def indices(self) -> list[int] | None:
+        if self.option_indices:
+            return self.option_indices
+        if self.option_index is not None:
+            return [self.option_index]
+        return None
 
 
 class IntakeAnswerOut(BaseModel):
@@ -349,7 +378,15 @@ class IntakeAnswerOut(BaseModel):
 class IntakeFieldEditIn(BaseModel):
     field: str
     option_index: int | None = None
+    option_indices: list[int] | None = None
     free_text: str | None = None
+
+    def indices(self) -> list[int] | None:
+        if self.option_indices:
+            return self.option_indices
+        if self.option_index is not None:
+            return [self.option_index]
+        return None
 
 
 class IntakeEditIn(BaseModel):
@@ -643,28 +680,29 @@ async def _intake_transcript(
     value the Profile tab shows. A chip pick renders through IntakeOption.
     LABEL (the Thai text the client actually clicked), matching what
     ClientWorkspace.tsx echoes as the user turn at answer time; free text
-    is decrypted.
+    is decrypted. A multi-select answer spans several live rows but replays
+    as ONE user bubble — its labels joined the same way the live echo
+    joined them.
     """
     rows = (
         await session.execute(
-            select(IntakeAnswer, IntakeQuestion)
+            select(IntakeAnswer, IntakeQuestion, IntakeOption)
             .join(IntakeQuestion, IntakeQuestion.id == IntakeAnswer.question_id)
+            .outerjoin(IntakeOption, IntakeOption.id == IntakeAnswer.option_id)
             .where(
                 IntakeAnswer.engagement_step_id == step1.id,
                 IntakeAnswer.superseded_at.is_(None),
             )
-            .order_by(IntakeQuestion.ordinal)
+            .order_by(IntakeQuestion.ordinal, IntakeOption.ordinal)
         )
     ).all()
 
-    turns: list[TranscriptTurnOut] = []
-    for answer, question in rows:
-        if answer.option_id is not None:
-            value = (
-                await session.execute(
-                    select(IntakeOption.label).where(IntakeOption.id == answer.option_id)
-                )
-            ).scalar_one()
+    # Group the (possibly several) live rows of each question into one
+    # answer bubble, keeping question order.
+    grouped: dict[uuid.UUID, tuple[IntakeQuestion, list[str]]] = {}
+    for answer, question, option in rows:
+        if option is not None:
+            value = option.label
         else:
             value = crypto.decrypt(
                 answer.value_ciphertext,
@@ -672,8 +710,16 @@ async def _intake_transcript(
                 answer.value_tag,
                 answer.key_version,
             )
+        grouped.setdefault(question.id, (question, []))[1].append(value)
+
+    turns: list[TranscriptTurnOut] = []
+    for question, values in grouped.values():
         turns.append(TranscriptTurnOut(who="ai", stage="interview", text=question.prompt))
-        turns.append(TranscriptTurnOut(who="user", stage="interview", text=value))
+        turns.append(
+            TranscriptTurnOut(
+                who="user", stage="interview", text=intake_svc.join_answer_values(values)
+            )
+        )
     return turns
 
 
@@ -843,13 +889,13 @@ async def answer_intake(
     if current_index >= total_steps:
         raise HTTPException(status_code=400, detail="Intake is already complete")
 
-    step_def, value, question_id, option_id, source = await _resolve_answer_value(
+    step_def, value, question_id, option_ids, source = await _resolve_answer_value(
         session, engagement, current_index,
-        option_index=body.option_index, free_text=body.free_text,
+        option_indices=body.indices(), free_text=body.free_text,
     )
     await _record_answer(
         session, step1, question_id=question_id, field_key=step_def["field"],
-        option_id=option_id, free_text_value=None if option_id is not None else value, source=source,
+        option_ids=option_ids, free_text_value=None if option_ids else value, source=source,
     )
 
     next_index = current_index + 1
@@ -917,7 +963,7 @@ async def edit_intake_fields(
     # Resolve and validate everything first, writing nothing — so a 400 on the
     # second of two updates can't leave the first one half-applied, and so the
     # rate-limit slot below is only spent on a request that will really write.
-    resolved: list[tuple[str, uuid.UUID, uuid.UUID | None, str]] = []
+    resolved: list[tuple[str, uuid.UUID, list[uuid.UUID], str]] = []
     for update in body.updates:
         idx = await intake_svc.index_of_field_db(session, engagement.intake_script_id, update.field)
         if idx is None:
@@ -925,18 +971,18 @@ async def edit_intake_fields(
         if idx >= current_index:
             raise HTTPException(status_code=400, detail=f"'{update.field}' hasn't been asked yet")
 
-        step_def, value, question_id, option_id, _source = await _resolve_answer_value(
+        step_def, value, question_id, option_ids, _source = await _resolve_answer_value(
             session, engagement, idx,
-            option_index=update.option_index, free_text=update.free_text,
+            option_indices=update.indices(), free_text=update.free_text,
         )
         if fields_before.get(update.field) == value:
             continue  # no-op — no new row, no audit entry, nothing worth regenerating
-        resolved.append((step_def["field"], question_id, option_id, value))
+        resolved.append((step_def["field"], question_id, option_ids, value))
 
     changed: list[str] = []
     if resolved:
         rate_limit_svc.check(f"intake_edit:{ctx.user.id}", limit=5, window_seconds=60)
-        for field_key, question_id, option_id, value in resolved:
+        for field_key, question_id, option_ids, value in resolved:
             await _record_answer(
                 session, step1, question_id=question_id, field_key=field_key,
                 # source='edit' (not the chip/free_text the resolver returned)
@@ -944,7 +990,7 @@ async def edit_intake_fields(
                 # not the original answer; distinguishing the two is exactly
                 # what the old single-blob client_profiles.fields_ciphertext
                 # could never record.
-                option_id=option_id, free_text_value=None if option_id is not None else value, source="edit",
+                option_ids=option_ids, free_text_value=None if option_ids else value, source="edit",
             )
             changed.append(field_key)
 

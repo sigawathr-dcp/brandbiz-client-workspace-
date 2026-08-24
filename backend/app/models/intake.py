@@ -111,6 +111,10 @@ class IntakeQuestion(Base):
     # weights sum to 1.000.
     match_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
     weight: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
+    # True when the client may answer with SEVERAL chips (the six scoring
+    # questions — migration 0064). Multi answers store one intake_answers row
+    # per picked option; feasibility/trigger questions stay single-pick.
+    multi_select: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     use_mode: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default="match"
     )
@@ -151,9 +155,10 @@ class IntakeAnswer(Base):
 
     __tablename__ = "intake_answers"
     __table_args__ = (
-        # Enforced fully in the migration DDL as a partial unique index
-        # (WHERE superseded_at IS NULL) — exactly one *live* answer per
-        # field, but unlimited superseded ones.
+        # Enforced fully in the migration DDL as partial unique indexes
+        # (WHERE superseded_at IS NULL) — a field's live answer is either
+        # one free-text row or a SET of chip rows with distinct option_ids
+        # (multi-select, migration 0064); superseded rows are unlimited.
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
