@@ -34,7 +34,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.services import case_taxonomy
-from app.services.client_intake import INTAKE_SCRIPT
+from app.services.client_intake import INTAKE_SCRIPT, split_answer_values
 
 # {dimension: {token, ...}} for trigger questions only. Deliberately a
 # SEPARATE namespace from case_taxonomy.VOCAB: that one is the vocabulary
@@ -79,14 +79,24 @@ def tag_for_value(dimension: str, value: str) -> str | None:
     return _VALUE_TO_TAG.get(dimension, {}).get(value)
 
 
-def _scoring_tag(fields: Mapping[str, str], dimension: str) -> str | None:
+def _scoring_tags(fields: Mapping[str, str], dimension: str) -> tuple[str, ...]:
+    """The client's token(s) for a scoring dimension, in stored (ordinal)
+    order — several when the question was answered multi-select (the stored
+    value is then a joined string; see client_intake.ANSWER_JOINER).
+    Components that resolve to no token (free text) are dropped."""
     value = fields.get(dimension)
     if value is None:
-        return None
-    return case_taxonomy.tag_for_value(dimension, value)
+        return ()
+    return tuple(
+        tag
+        for part in split_answer_values(value)
+        if (tag := case_taxonomy.tag_for_value(dimension, part)) is not None
+    )
 
 
-def _own_commerce_directive(asset_tag: str | None, objective_tag: str | None) -> str:
+def _own_commerce_directive(
+    asset_tags: tuple[str, ...], objective_tags: tuple[str, ...]
+) -> str:
     """The sheet requires the recommendation be shaded by Existing Assets /
     Channel and Business Objective ("โดยดู Existing Assets / Channel และ
     Business Objective ประกอบ") rather than fired as one fixed sentence.
@@ -98,8 +108,15 @@ def _own_commerce_directive(asset_tag: str | None, objective_tag: str | None) ->
     objective is first-party data, retention or O2O, owned commerce IS the
     objective and should lead the plan. When they came for awareness or a
     launch, it must not hijack the plan they asked for.
+
+    Either dimension may carry several tokens (multi-select intake). The
+    build message uses the FIRST token that has a specific message — the
+    stored order is the option-card order, so "already has a LINE OA" wins
+    over vaguer facts. The stance takes the strongest signal: any
+    data/retention/O2O objective makes owned commerce a stated goal, even
+    if awareness was picked alongside it.
     """
-    build = {
+    build_messages = {
         "line_oa_no_crm": (
             "The client already has a LINE OA but no CRM behind it, so the "
             "cheapest route is activating that OA — LINE Microsite plus "
@@ -123,18 +140,23 @@ def _own_commerce_directive(asset_tag: str | None, objective_tag: str | None) ->
             "online-to-offline loop rather than treating it as a separate "
             "e-commerce build."
         ),
-    }.get(asset_tag or "", (
-        "The client has no meaningful owned customer base yet, so treat "
-        "owned commerce as foundational work with its own phase in the "
-        "timeline."
-    ))
+    }
+    build = next(
+        (build_messages[t] for t in asset_tags if t in build_messages),
+        (
+            "The client has no meaningful owned customer base yet, so treat "
+            "owned commerce as foundational work with its own phase in the "
+            "timeline."
+        ),
+    )
 
-    if objective_tag in {"lead_data", "retention_loyalty", "o2o"}:
+    objectives = set(objective_tags)
+    if objectives & {"lead_data", "retention_loyalty", "o2o"}:
         stance = (
             "This aligns with the objective the client already stated, so make "
             "it a leading workstream of the plan."
         )
-    elif objective_tag in {"awareness", "launch", "engagement_community"}:
+    elif objectives & {"awareness", "launch", "engagement_community"}:
         stance = (
             "The client's stated objective is reach, not retention, so include "
             "this as supporting foundation work — it must NOT displace the "
@@ -172,16 +194,17 @@ def evaluate(fields: Mapping[str, str]) -> tuple[Trigger, ...]:
     if own_tag in _OWN_COMMERCE_FIRES:
         # asset_channel and objective are SCORING dimensions, so their tokens
         # come from case_taxonomy, not from this module's TRIGGER_VOCAB.
-        asset_tag = _scoring_tag(fields, "asset_channel")
-        objective_tag = _scoring_tag(fields, "objective")
+        # Both may be multi-valued (multi-select intake).
+        asset_tags = _scoring_tags(fields, "asset_channel")
+        objective_tags = _scoring_tags(fields, "objective")
         triggers.append(Trigger(
             key="own_commerce",
             reason=(
                 f"own_commerce={own_tag}"
-                f", asset_channel={asset_tag or 'unknown'}"
-                f", objective={objective_tag or 'unknown'}"
+                f", asset_channel={'+'.join(asset_tags) or 'unknown'}"
+                f", objective={'+'.join(objective_tags) or 'unknown'}"
             ),
-            directive=_own_commerce_directive(asset_tag, objective_tag),
+            directive=_own_commerce_directive(asset_tags, objective_tags),
         ))
 
     return tuple(triggers)

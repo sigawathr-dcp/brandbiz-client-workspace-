@@ -10,11 +10,14 @@ from __future__ import annotations
 import pytest
 
 from app.services.client_intake import (
+    ANSWER_JOINER,
     FIELD_LABELS,
     INTAKE_SCRIPT,
     field_manifest,
     index_of_field,
     resolve_answer,
+    resolve_answers,
+    split_answer_values,
     step_at,
     total_steps,
 )
@@ -97,6 +100,22 @@ class TestScriptShape:
     def test_insight_count_matches_question_count(self):
         assert sum(1 for s in INTAKE_SCRIPT if s.get("insight")) == total_steps()
 
+    def test_multi_select_is_exactly_the_scoring_questions(self):
+        # The six "match" questions accept several chips; feasibility
+        # (timeframe, budget) and trigger (own_commerce) questions stay
+        # single-pick — a budget band is one fact, not a set.
+        for step in INTAKE_SCRIPT:
+            assert step["multi_select"] == (step["use_mode"] == "match"), step["field"]
+
+    def test_answer_joiner_never_appears_in_an_option_value_or_label(self):
+        # A multi answer is stored/displayed as values joined by
+        # ANSWER_JOINER and split back apart for scoring — a value that
+        # contained the joiner would split into unmappable pieces.
+        for step in INTAKE_SCRIPT:
+            for opt in step["options"]:
+                assert ANSWER_JOINER not in opt["value"], opt["value"]
+                assert ANSWER_JOINER not in opt["label"], opt["label"]
+
     def test_fields_are_unique(self):
         fields = [s["field"] for s in INTAKE_SCRIPT]
         assert len(fields) == len(set(fields))
@@ -178,3 +197,37 @@ class TestResolveAnswer:
         step = INTAKE_SCRIPT[0]
         with pytest.raises(ValueError):
             resolve_answer(step, option_index=None, free_text="   ")
+
+
+class TestResolveAnswers:
+    """Multi-select resolution (the six scoring questions)."""
+
+    def test_multiple_chips_resolve_in_ordinal_order(self):
+        step = INTAKE_SCRIPT[0]  # industry — multi_select
+        values = resolve_answers(step, option_indices=[2, 0], free_text=None)
+        assert values == [step["options"][0]["value"], step["options"][2]["value"]]
+
+    def test_duplicate_indices_are_deduped(self):
+        step = INTAKE_SCRIPT[0]
+        values = resolve_answers(step, option_indices=[1, 1, 1], free_text=None)
+        assert values == [step["options"][1]["value"]]
+
+    def test_multiple_chips_on_a_single_select_question_raise(self):
+        budget = next(s for s in INTAKE_SCRIPT if s["field"] == "budget")
+        with pytest.raises(ValueError):
+            resolve_answers(budget, option_indices=[0, 1], free_text=None)
+
+    def test_single_chip_on_a_single_select_question_is_fine(self):
+        budget = next(s for s in INTAKE_SCRIPT if s["field"] == "budget")
+        values = resolve_answers(budget, option_indices=[1], free_text=None)
+        assert values == [budget["options"][1]["value"]]
+
+    def test_any_out_of_range_index_raises(self):
+        step = INTAKE_SCRIPT[0]
+        with pytest.raises(ValueError):
+            resolve_answers(step, option_indices=[0, len(step["options"])], free_text=None)
+
+    def test_join_then_split_round_trips(self):
+        step = INTAKE_SCRIPT[0]
+        values = resolve_answers(step, option_indices=[0, 3], free_text=None)
+        assert split_answer_values(ANSWER_JOINER.join(values)) == values

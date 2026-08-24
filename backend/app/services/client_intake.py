@@ -77,6 +77,11 @@ class IntakeStep(TypedDict):
     field: str
     question: str
     options: list[IntakeOption]
+    # True when the client may pick SEVERAL chips for this question (the six
+    # "match" questions). Feasibility and trigger questions stay single-pick:
+    # a budget band or platform-dependency level is one fact, not a set.
+    # Stored per question in intake_questions.multi_select (migration 0064).
+    multi_select: bool
     insight: str
     match_tag: str | None  # case_study_tags.tag_type this field scores against
     weight: float | None  # share of the match score; None => non-scoring
@@ -119,6 +124,7 @@ class IntakeStep(TypedDict):
 INTAKE_SCRIPT: list[IntakeStep] = [
     {
         "field": "industry",
+        "multi_select": True,
         "question": (
             "สวัสดีครับ ผมน้องภูมิ ที่ปรึกษาแบรนด์ของ Brandbiz ครับ 🙂\n"
             "ผมจะถามเรื่องธุรกิจของคุณ 9 ข้อ แล้วไปหาข้อมูลตลาดมาให้ "
@@ -144,6 +150,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "stage",
+        "multi_select": True,
         "question": "รับทราบครับ ตอนนี้ธุรกิจของคุณอยู่ในช่วงไหนครับ?",
         "options": [
             {"label": "กำลังจะเปิด / ยังไม่เริ่มขาย", "value": "Pre-launch", "tag": "pre_launch"},
@@ -161,6 +168,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "audience",
+        "multi_select": True,
         "question": "เข้าใจแล้วครับ กลุ่มลูกค้าหลักที่คุณอยากเจาะคือใครครับ?",
         "options": [
             {"label": "Gen Z / นักเรียน / นักศึกษา", "value": "Gen Z / students", "tag": "gen_z_student"},
@@ -179,6 +187,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "challenge",
+        "multi_select": True,
         "question": "ขอบคุณครับ 🙏 ตอนนี้ปัญหาที่อยากแก้มากที่สุดคือข้อไหนครับ?",
         "options": [
             {"label": "คนยังไม่รู้จักแบรนด์ / Awareness ต่ำ", "value": "Low brand awareness", "tag": "low_awareness"},
@@ -199,6 +208,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "own_commerce",
+        "multi_select": False,
         "question": (
             "เข้าใจปัญหาแล้วครับ อีกเรื่องที่อยากรู้ — ตอนนี้ยอดขายของธุรกิจคุณ"
             "พึ่งช่องทางที่ต้องเสียค่าธรรมเนียม / GP หรือแพลตฟอร์มภายนอกมากแค่ไหนครับ?"
@@ -218,6 +228,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "asset_channel",
+        "multi_select": True,
         "question": "ชัดเจนครับ ตอนนี้ธุรกิจมีช่องทางหรือฐานลูกค้าอะไรอยู่แล้วบ้างครับ?",
         "options": [
             {"label": "Social Media เป็นหลัก", "value": "Mainly social media", "tag": "social_only"},
@@ -237,6 +248,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "objective",
+        "multi_select": True,
         "question": "ดีครับ ผลลัพธ์หลักที่อยากได้จากโปรเจกต์นี้คืออะไรครับ?",
         "options": [
             {"label": "สร้าง Brand Awareness", "value": "Build brand awareness", "tag": "awareness"},
@@ -257,6 +269,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "timeframe",
+        "multi_select": False,
         "question": "รับทราบครับ อยากเริ่มหรือเห็นผลภายในกรอบเวลาประมาณไหนครับ?",
         "options": [
             {"label": "เร่งด่วน ภายใน 1–3 เดือน", "value": "Urgent - within 1-3 months", "tag": "urgent_1_3m"},
@@ -272,6 +285,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
     },
     {
         "field": "budget",
+        "multi_select": False,
         "question": "ขอบคุณครับ คำถามสุดท้ายก่อนผมไปหาข้อมูล — งบประมาณที่เตรียมไว้สำหรับโปรเจกต์นี้อยู่ประมาณช่วงไหนครับ?",
         "options": [
             {"label": "ต่ำกว่า 300,000 บาท", "value": "Under ฿300,000", "tag": "under_300k"},
@@ -287,6 +301,28 @@ INTAKE_SCRIPT: list[IntakeStep] = [
         "dev_note": "ไม่ควรใช้ตัด Case ที่เหมาะออกทันที — ใช้คัด Scope และ Plan & Budget หลัง Match Case แล้ว",
     },
 ]
+
+# Joins the option values of a multi-select answer into the single display
+# string that _load_fields / the transcript / build_context_query carry
+# ("Beauty / skincare / cosmetics; Health / supplements"). "; " because
+# option values themselves contain both "," and "/" — the scorer splits the
+# stored string back apart on this token (split_answer_values), so the
+# joiner must never appear inside a single option value; guarded by
+# test_client_intake.py.
+ANSWER_JOINER = "; "
+
+
+def join_answer_values(values: list[str]) -> str:
+    return ANSWER_JOINER.join(values)
+
+
+def split_answer_values(value: str) -> list[str]:
+    """Inverse of join_answer_values for a loaded profile value. A
+    single-select or free-text answer comes back as a one-element list; a
+    free text that happens to contain '; ' splits into pieces no chip value
+    matches, which downstream treats exactly like unsplit free text."""
+    return [p for p in (s.strip() for s in value.split(ANSWER_JOINER)) if p]
+
 
 INTAKE_COMPLETE_MESSAGE = (
     "ครบแล้วครับ 🙏 ผมขออนุญาตไปดูข้อมูลตลาดและคู่แข่งในธุรกิจของคุณก่อนสักครู่นะครับ"
@@ -414,6 +450,7 @@ def field_manifest() -> list[dict]:
         {
             "key": step["field"],
             "label": FIELD_LABELS.get(step["field"], step["field"]),
+            "multi_select": step["multi_select"],
             "options": [{"index": i, "label": o["label"]} for i, o in enumerate(step["options"])],
         }
         for step in INTAKE_SCRIPT
@@ -467,6 +504,7 @@ async def field_manifest_db(session: AsyncSession, script_id: uuid.UUID) -> list
         out.append({
             "key": q.field_key,
             "label": FIELD_LABELS.get(q.field_key, q.field_key),
+            "multi_select": q.multi_select,
             "options": [{"index": i, "label": o.label} for i, o in enumerate(options)],
         })
     return out
@@ -488,6 +526,7 @@ async def step_at_db(session: AsyncSession, script_id: uuid.UUID, index: int) ->
         "field": q.field_key,
         "question": q.prompt,
         "options": [{"label": o.label, "value": o.value} for o in options],
+        "multi_select": q.multi_select,
         "insight": q.insight or "",
     }
 
@@ -500,6 +539,22 @@ async def option_id_at_db(session: AsyncSession, question_id: uuid.UUID, option_
     if not (0 <= option_index < len(options)):
         return None
     return options[option_index]
+
+
+async def option_ids_at_db(
+    session: AsyncSession, question_id: uuid.UUID, option_indices: list[int]
+) -> list[uuid.UUID] | None:
+    """Resolve several chip indices at once (a multi-select answer), in
+    ordinal order regardless of pick order — the same normalisation
+    resolve_answers() applies to the stored values. None if any index is
+    out of range."""
+    result = await session.execute(
+        select(IntakeOptionRow.id).where(IntakeOptionRow.question_id == question_id).order_by(IntakeOptionRow.ordinal)
+    )
+    options = list(result.scalars().all())
+    if any(not (0 <= i < len(options)) for i in option_indices):
+        return None
+    return [options[i] for i in sorted(set(option_indices))]
 
 
 async def question_id_at_db(session: AsyncSession, script_id: uuid.UUID, index: int) -> uuid.UUID | None:
@@ -517,14 +572,37 @@ async def index_of_field_db(session: AsyncSession, script_id: uuid.UUID, field: 
     return None
 
 
-def resolve_answer(step: IntakeStep, *, option_index: int | None, free_text: str | None) -> str:
-    """Resolve what gets stored for a step's field: a chip's value, or the
-    raw free-text answer when the user skipped the chips (see
-    components/client/IntakeChips.tsx "Skip" affordance)."""
-    if option_index is not None:
-        if not (0 <= option_index < len(step["options"])):
-            raise ValueError("option_index out of range")
-        return step["options"][option_index]["value"]
+def resolve_answers(
+    step: IntakeStep, *, option_indices: list[int] | None, free_text: str | None
+) -> list[str]:
+    """Resolve what gets stored for a step's field: one value per picked
+    chip, or the single raw free-text answer when the user skipped the chips
+    (see components/client/IntakeChips.tsx "อื่นๆ" affordance).
+
+    More than one chip is only legal on a multi-select question. Indices are
+    deduped and returned in ordinal order, so the same picks always store
+    the same value list regardless of click order.
+    """
+    if option_indices:
+        indices = sorted(set(option_indices))
+        if len(indices) > 1 and not step.get("multi_select"):
+            raise ValueError("this question accepts a single choice")
+        for i in indices:
+            if not (0 <= i < len(step["options"])):
+                raise ValueError("option_index out of range")
+        return [step["options"][i]["value"] for i in indices]
     if free_text is not None and free_text.strip():
-        return free_text.strip()
+        return [free_text.strip()]
     raise ValueError("either option_index or non-empty free_text is required")
+
+
+def resolve_answer(step: IntakeStep, *, option_index: int | None, free_text: str | None) -> str:
+    """Single-choice wrapper around resolve_answers() — kept because a
+    single answer is still the only legal shape for non-multi questions and
+    the older call sites/tests use it."""
+    values = resolve_answers(
+        step,
+        option_indices=[option_index] if option_index is not None else None,
+        free_text=free_text,
+    )
+    return values[0]

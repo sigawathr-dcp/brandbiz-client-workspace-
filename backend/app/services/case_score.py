@@ -42,6 +42,7 @@ from collections.abc import Mapping, Set
 from dataclasses import dataclass
 
 from app.services import case_taxonomy
+from app.services import client_intake as intake_svc
 
 # Credit for a case in an adjacent industry (see case_taxonomy's
 # INDUSTRY_ADJACENCY). Half: clearly better than unrelated, clearly worse
@@ -79,30 +80,53 @@ class CaseScore:
         return tuple(d.dimension for d in self.dimensions if d.reason == "exact")
 
 
+def _token_credit(dimension: str, token: str, case_tags: Set[str]) -> float:
+    if token in case_tags:
+        return 1.0
+    if dimension == "industry":
+        neighbours = case_taxonomy.INDUSTRY_ADJACENCY.get(token, frozenset())
+        if neighbours & set(case_tags):
+            return ADJACENT_CREDIT
+    return 0.0
+
+
 def _dimension_raw(
     dimension: str,
-    client_tag: str | None,
+    client_tags: Set[str] | str | None,
     case_tags: Set[str],
     dense: float,
 ) -> tuple[float, str]:
-    if client_tag is None:
+    """`client_tags` is the client's token(s) for this dimension — several
+    when the question was answered multi-select. A bare str is accepted for
+    the older single-token callers (the eval harness, tests) and treated as
+    a one-token set.
+
+    Multi-token credit is the MEAN of per-token credit: a client who picked
+    two challenges and matched one gets 0.5, not full credit — a case that
+    covers everything they said still outranks one that covers half. The
+    reason reports the best single token (exact beats adjacent beats miss)
+    so `matched_on` still names a dimension where at least one pick matched
+    outright.
+    """
+    if client_tags is None:
         # Free text: no token to compare, so defer to the embedding.
+        return (max(0.0, min(1.0, dense)) * FREE_TEXT_DAMPING, "inferred")
+    tokens = (client_tags,) if isinstance(client_tags, str) else tuple(client_tags)
+    if not tokens:
         return (max(0.0, min(1.0, dense)) * FREE_TEXT_DAMPING, "inferred")
     if not case_tags:
         # The case has no tag on this dimension at all — unknown, not absent.
         # Same treatment as free text: defer, damped.
         return (max(0.0, min(1.0, dense)) * FREE_TEXT_DAMPING, "inferred")
-    if client_tag in case_tags:
-        return (1.0, "exact")
-    if dimension == "industry":
-        neighbours = case_taxonomy.INDUSTRY_ADJACENCY.get(client_tag, frozenset())
-        if neighbours & set(case_tags):
-            return (ADJACENT_CREDIT, "adjacent")
-    return (0.0, "miss")
+    credits = [_token_credit(dimension, t, case_tags) for t in tokens]
+    raw = sum(credits) / len(credits)
+    best = max(credits)
+    reason = "exact" if best >= 1.0 else "adjacent" if best > 0.0 else "miss"
+    return (raw, reason)
 
 
 def score_case(
-    client_tags: Mapping[str, str | None],
+    client_tags: Mapping[str, Set[str] | str | None],
     case_tags: Mapping[str, Set[str]],
     weights: Mapping[str, float],
     dense_score: float,
@@ -112,9 +136,12 @@ def score_case(
 ) -> CaseScore:
     """Score one case study against one client profile.
 
-    client_tags: {dimension: token or None}. None means the client answered
-        this dimension in free text. A dimension missing from the mapping
-        entirely means unanswered (an abandoned intake) and is dropped from
+    client_tags: {dimension: token(s) or None} — a set when the client
+        picked several chips on a multi-select question; a bare str is
+        accepted and treated as a one-token set. None means the client
+        answered this dimension in free text. A dimension missing from the
+        mapping entirely means unanswered (an abandoned intake) and is
+        dropped from
         the weighting rather than scored zero — otherwise a half-finished
         interview would drag every case down uniformly and the ranking, which
         is all that matters, would be unchanged but the displayed percentages
@@ -165,9 +192,18 @@ def score_case(
     )
 
 
-def client_tags_from_fields(fields: Mapping[str, str]) -> dict[str, str | None]:
+def client_tags_from_fields(fields: Mapping[str, str]) -> dict[str, frozenset[str] | None]:
     """Map a loaded intake profile ({field: english value}) onto
-    {dimension: token or None}.
+    {dimension: token set or None}.
+
+    A multi-select answer arrives as one joined string (see
+    client_intake.ANSWER_JOINER / routers.client._load_fields), so each
+    value is split back into its components and each component resolved to
+    its token. None means no component resolved — free text, which the
+    damped dense fallback carries. A component that doesn't resolve inside
+    an otherwise-resolvable answer is dropped (it is free text mixed in by
+    an older edit path; scoring the mapped picks is strictly more signal
+    than degrading the whole dimension).
 
     Keyed by the question's `match_tag`, which for every v2 scoring question
     equals its field name. Fields the current script does not define (a v1
@@ -177,9 +213,14 @@ def client_tags_from_fields(fields: Mapping[str, str]) -> dict[str, str | None]:
     answers into v2 tokens — a mapping that guessed would put words in an old
     client's mouth.
     """
-    out: dict[str, str | None] = {}
+    out: dict[str, frozenset[str] | None] = {}
     for dimension in case_taxonomy.DIMENSIONS:
         if dimension not in fields:
             continue
-        out[dimension] = case_taxonomy.tag_for_value(dimension, fields[dimension])
+        tokens = frozenset(
+            tag
+            for part in intake_svc.split_answer_values(fields[dimension])
+            if (tag := case_taxonomy.tag_for_value(dimension, part)) is not None
+        )
+        out[dimension] = tokens or None
     return out

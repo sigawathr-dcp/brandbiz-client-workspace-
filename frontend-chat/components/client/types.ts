@@ -9,6 +9,10 @@ export interface CurrentStep {
   field: string
   question: string
   options: Chip[]
+  // True when the client may pick SEVERAL chips (the six scoring questions)
+  // — IntakeChips then toggles selections and answers on an explicit
+  // confirm, instead of answering on first tap.
+  multi_select: boolean
 }
 
 export interface IntakeAnswerResponse {
@@ -30,6 +34,9 @@ export interface IntakeField {
   // Same chips the intake step offered — lets the Profile tab's edit mode
   // (Task 5.11) render familiar chips instead of a bare free-text box.
   options: Chip[]
+  // Mirrors CurrentStep.multi_select — the edit mode's chips toggle instead
+  // of replacing each other on a multi-select field.
+  multi_select: boolean
 }
 
 export interface BootstrapData {

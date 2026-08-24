@@ -16,6 +16,9 @@ export type WorkTab = 'profile' | 'research' | 'cases'
 // exactly like the original intake answer did (client_intake.resolve_answer).
 interface PendingEdit {
   option_index?: number
+  // Multi-select fields (IntakeField.multi_select) collect every toggled
+  // chip here instead of replacing option_index on each tap.
+  option_indices?: number[]
   free_text?: string
   label: string
 }
@@ -64,7 +67,9 @@ export default function WorkPanel({
   // Resolves to whether the server accepted the edit. A `false` keeps the
   // pending chips and edit mode on screen so the client can see what failed
   // and retry, instead of the correction silently disappearing.
-  onSaveProfile: (updates: { field: string; option_index?: number; free_text?: string }[]) => Promise<boolean>
+  onSaveProfile: (
+    updates: { field: string; option_index?: number; option_indices?: number[]; free_text?: string }[]
+  ) => Promise<boolean>
   savingProfile: boolean
   profileError: string
   // engagement_steps.progress_current for the interview step, straight from
@@ -80,8 +85,28 @@ export default function WorkPanel({
   const [editMode, setEditMode] = useState(false)
   const [pending, setPending] = useState<Record<string, PendingEdit>>({})
 
-  function pickChip(fieldKey: string, index: number, label: string) {
-    setPending((prev) => ({ ...prev, [fieldKey]: { option_index: index, label } }))
+  function pickChip(field: IntakeField, option: { index: number; label: string }) {
+    if (field.multi_select) {
+      // Toggle the chip in/out of the pending set; the row's preview label
+      // joins the picked labels the same way the server will ("; ").
+      setPending((prev) => {
+        const current = prev[field.key]?.option_indices ?? []
+        const next = current.includes(option.index)
+          ? current.filter((i) => i !== option.index)
+          : [...current, option.index].sort((a, b) => a - b)
+        if (next.length === 0) {
+          const { [field.key]: _dropped, ...rest } = prev
+          return rest
+        }
+        const label = field.options
+          .filter((o) => next.includes(o.index))
+          .map((o) => o.label)
+          .join('; ')
+        return { ...prev, [field.key]: { option_indices: next, label } }
+      })
+      return
+    }
+    setPending((prev) => ({ ...prev, [field.key]: { option_index: option.index, label: option.label } }))
   }
   function typeFreeText(fieldKey: string, text: string) {
     setPending((prev) => ({ ...prev, [fieldKey]: { free_text: text, label: text } }))
@@ -92,8 +117,16 @@ export default function WorkPanel({
   }
   async function saveEdit() {
     const updates = Object.entries(pending)
-      .filter(([, v]) => v.option_index !== undefined || (v.free_text ?? '').trim())
-      .map(([field, v]) => ({ field, option_index: v.option_index, free_text: v.free_text }))
+      .filter(
+        ([, v]) =>
+          v.option_index !== undefined || (v.option_indices?.length ?? 0) > 0 || (v.free_text ?? '').trim()
+      )
+      .map(([field, v]) => ({
+        field,
+        option_index: v.option_index,
+        option_indices: v.option_indices,
+        free_text: v.free_text,
+      }))
     const ok = await onSaveProfile(updates)
     if (!ok) return // keep `pending` and edit mode — profileError explains why
     setPending({})
@@ -210,33 +243,38 @@ export default function WorkPanel({
                     </div>
                     {editMode && answered && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 6, paddingLeft: 25 }}>
-                        {f.options.map((o) => (
-                          <button
-                            key={o.index}
-                            onClick={() => pickChip(f.key, o.index, o.label)}
-                            style={{
-                              // A long option (Thai copy runs long) has to wrap
-                              // inside the pill, not spill past it — so this is
-                              // minHeight + vertical padding, never a fixed
-                              // height.
-                              minHeight: 24,
-                              maxWidth: '100%',
-                              padding: '3px 9px',
-                              borderRadius: 12,
-                              border: edit?.option_index === o.index ? '1px solid var(--accent)' : '1px solid var(--line-2)',
-                              background: edit?.option_index === o.index ? 'var(--accent-weak)' : 'var(--surface)',
-                              color: edit?.option_index === o.index ? 'var(--accent)' : 'var(--ink-2)',
-                              fontSize: 11,
-                              lineHeight: 1.45,
-                              textAlign: 'left',
-                              whiteSpace: 'normal',
-                              overflowWrap: 'anywhere',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {o.label}
-                          </button>
-                        ))}
+                        {f.options.map((o) => {
+                          const picked =
+                            edit?.option_index === o.index ||
+                            (edit?.option_indices?.includes(o.index) ?? false)
+                          return (
+                            <button
+                              key={o.index}
+                              onClick={() => pickChip(f, o)}
+                              style={{
+                                // A long option (Thai copy runs long) has to wrap
+                                // inside the pill, not spill past it — so this is
+                                // minHeight + vertical padding, never a fixed
+                                // height.
+                                minHeight: 24,
+                                maxWidth: '100%',
+                                padding: '3px 9px',
+                                borderRadius: 12,
+                                border: picked ? '1px solid var(--accent)' : '1px solid var(--line-2)',
+                                background: picked ? 'var(--accent-weak)' : 'var(--surface)',
+                                color: picked ? 'var(--accent)' : 'var(--ink-2)',
+                                fontSize: 11,
+                                lineHeight: 1.45,
+                                textAlign: 'left',
+                                whiteSpace: 'normal',
+                                overflowWrap: 'anywhere',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {o.label}
+                            </button>
+                          )
+                        })}
                         <input
                           defaultValue=""
                           placeholder="Type your own…"

@@ -257,7 +257,10 @@ export default function ClientWorkspace() {
   }, [])
 
   const answerIntake = useCallback(
-    async (body: { option_index?: number; free_text?: string }, userLabel: string) => {
+    async (
+      body: { option_index?: number; option_indices?: number[]; free_text?: string },
+      userLabel: string
+    ) => {
       if (busy) return
       setBusy(true)
       appendTurn({ who: 'user', kind: 'text', text: userLabel })
@@ -325,6 +328,17 @@ export default function ClientWorkspace() {
     // No optimistic setFields here — answerIntake() replaces `fields` from
     // the server's canonical response once it lands (see its comment).
     void answerIntake({ option_index: chip.index }, chip.label)
+  }
+
+  function handlePickChips(chips: Chip[]) {
+    // A multi-select answer — several chips confirmed as ONE answer. The
+    // echoed user bubble joins the labels the same way the backend's
+    // transcript replay does (client_intake.ANSWER_JOINER), so a reload
+    // renders the identical bubble.
+    void answerIntake(
+      { option_indices: chips.map((c) => c.index) },
+      chips.map((c) => c.label).join('; ')
+    )
   }
 
   // ---- Research + cases -----------------------------------------------------
@@ -560,7 +574,7 @@ export default function ClientWorkspace() {
   // chips and closes edit mode on `true` — on a failure the client keeps their
   // selection and gets a message, instead of watching it silently vanish.
   async function handleSaveProfile(
-    updates: { field: string; option_index?: number; free_text?: string }[]
+    updates: { field: string; option_index?: number; option_indices?: number[]; free_text?: string }[]
   ): Promise<boolean> {
     if (updates.length === 0 || savingProfile) return false
     setSavingProfile(true)
@@ -1308,7 +1322,9 @@ export default function ClientWorkspace() {
               <IntakeChips
                 title={currentStep.question}
                 chips={currentStep.options}
+                multiSelect={currentStep.multi_select}
                 onPick={handlePickChip}
+                onPickMulti={handlePickChips}
                 onSubmitOther={handleSubmitOther}
                 disabled={busy}
               />

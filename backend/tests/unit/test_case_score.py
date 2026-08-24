@@ -81,6 +81,41 @@ class TestExactMatch:
         assert r.tag_score == pytest.approx(1.0 - SCORING_WEIGHTS["challenge"])
 
 
+class TestMultiSelectClient:
+    """A client may pick several chips per scoring question (multi-select
+    intake) — the dimension's credit is then the MEAN of per-token credit."""
+
+    def test_half_covered_multi_answer_earns_half_credit(self):
+        client = dict(_CLIENT, challenge=frozenset({"low_awareness", "slow_conversion"}))
+        r = score_case(client, _case(), SCORING_WEIGHTS, 0.5, alpha=1.0)
+        # The case covers low_awareness but not slow_conversion → 0.5 raw.
+        expected = 1.0 - SCORING_WEIGHTS["challenge"] * 0.5
+        assert r.tag_score == pytest.approx(expected)
+        # At least one pick matched outright, so the card may still say so.
+        assert "challenge" in r.matched_dimensions
+
+    def test_fully_covered_multi_answer_earns_full_credit(self):
+        client = dict(_CLIENT, audience=frozenset({"working_adult", "gen_z_student"}))
+        r = score_case(
+            client,
+            _case(audience={"working_adult", "gen_z_student"}),
+            SCORING_WEIGHTS, 0.5, alpha=1.0,
+        )
+        assert r.tag_score == pytest.approx(1.0)
+
+    def test_multi_answer_with_no_overlap_is_a_miss(self):
+        client = dict(_CLIENT, objective=frozenset({"lead_data", "o2o"}))
+        r = score_case(client, _case(), SCORING_WEIGHTS, 0.5, alpha=1.0)
+        assert r.tag_score == pytest.approx(1.0 - SCORING_WEIGHTS["objective"])
+        assert "objective" not in r.matched_dimensions
+
+    def test_adjacent_token_in_a_multi_answer_earns_adjacent_credit(self):
+        client = dict(_CLIENT, industry=frozenset({"beauty", "automotive"}))
+        r = score_case(client, _case(), SCORING_WEIGHTS, 0.5, alpha=1.0)
+        # beauty matches exactly (1.0), automotive misses (0.0) → mean 0.5.
+        assert r.tag_score == pytest.approx(1.0 - SCORING_WEIGHTS["industry"] * 0.5)
+
+
 class TestAdjacency:
     def test_adjacent_industry_earns_partial_credit(self):
         # The sheet's own note says industry is "ไม่ใช่เงื่อนไขตายตัว". A
@@ -206,8 +241,18 @@ class TestClientTagsFromFields:
             for step in INTAKE_SCRIPT
         }
         tags = client_tags_from_fields(fields)
-        assert tags["industry"] == INTAKE_SCRIPT[0]["options"][0]["tag"]
+        assert tags["industry"] == frozenset({INTAKE_SCRIPT[0]["options"][0]["tag"]})
         assert set(tags) == set(case_taxonomy.DIMENSIONS)
+
+    def test_multi_select_values_split_into_a_token_set(self):
+        fields = {step["field"]: step["options"][0]["value"] for step in INTAKE_SCRIPT}
+        fields["industry"] = "; ".join(
+            [INTAKE_SCRIPT[0]["options"][0]["value"], INTAKE_SCRIPT[0]["options"][1]["value"]]
+        )
+        tags = client_tags_from_fields(fields)
+        assert tags["industry"] == frozenset(
+            {INTAKE_SCRIPT[0]["options"][0]["tag"], INTAKE_SCRIPT[0]["options"][1]["tag"]}
+        )
 
     def test_free_text_resolves_to_none_not_a_crash(self):
         fields = {step["field"]: step["options"][0]["value"] for step in INTAKE_SCRIPT}
