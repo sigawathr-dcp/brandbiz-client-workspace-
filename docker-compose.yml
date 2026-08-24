@@ -128,7 +128,12 @@ services:
     image: alpine:3.20
     runtime: runc
     environment:
-      HERMES_API_KEY: ${HERMES_API_KEY:?required}
+      # NOT `:?required` — Compose interpolates every service in the file,
+      # including ones behind an inactive profile, so a `:?` here would fail
+      # *any* compose command whenever HERMES_API_KEY is blank (which
+      # .env.example documents as the way to disable Hermes). The requirement
+      # is enforced in the entrypoint below, which only runs under the profile.
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
       HERMES_OLLAMA_URL: ${HERMES_OLLAMA_URL:-http://192.168.20.18:12341/v1}
       HERMES_OLLAMA_MODEL: ${HERMES_OLLAMA_MODEL:-hermes3:8b}
     volumes:
@@ -138,6 +143,10 @@ services:
       - -c
       - |
         set -e
+        if [ -z "$${HERMES_API_KEY}" ]; then
+          echo "hermes-init: HERMES_API_KEY must be set to run the hermes-docker profile" >&2
+          exit 1
+        fi
         if [ ! -f /opt/data/config.yaml ]; then
           cat > /opt/data/config.yaml <<EOF
         model:

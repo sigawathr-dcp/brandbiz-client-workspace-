@@ -344,8 +344,12 @@ export default function ClientWorkspace() {
   // ---- Research + cases -----------------------------------------------------
 
   const runResearchThenCases = useCallback(async () => {
+    // Only preselect the tab — do NOT force the panel open. On mobile
+    // (<=768px) .client-workpanel is a full-screen drawer, so opening it here
+    // threw the client out of the chat the moment they answered question 9.
+    // Research and cases both stream into the chat as their own turns, so the
+    // client stays in the conversation and opens the panel when they want it.
     setTab('research')
-    setWorkPanelOpen(true) // no-op on desktop — see .client-workpanel in globals.css
     setResearchStatus('pending')
     const researchTurnId = appendTurn({ who: 'ai', kind: 'research', text: '', researchStatus: 'pending' })
     try {
@@ -596,6 +600,13 @@ export default function ClientWorkspace() {
         await res.json()
       setFields(data.fields)
       setStep(data.step)
+      // Back to the chat once the edit lands. On mobile (<=768px)
+      // .client-workpanel is a full-screen drawer, so leaving it open parks the
+      // client on the profile while everything that answers their edit — the
+      // milestone card below, the re-run scan, the redrafted plan — happens in
+      // the thread behind it. No-op on desktop, where the panel is a fixed
+      // column and `.open` does nothing (globals.css).
+      setWorkPanelOpen(false)
       if (data.changed.length === 0) return true // nothing actually changed — no pipeline to re-run
 
       if (!data.completed) return true // still mid-intake — the chat just continues at the current question

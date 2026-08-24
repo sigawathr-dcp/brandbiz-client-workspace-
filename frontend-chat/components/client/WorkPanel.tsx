@@ -23,6 +23,17 @@ interface PendingEdit {
   label: string
 }
 
+// One correction as PATCH /client/intake/fields takes it (IntakeEditIn).
+type ProfileUpdate = { field: string; option_index?: number; option_indices?: number[]; free_text?: string }
+
+// How the server joins a multi-select answer into one stored string
+// (client_intake.ANSWER_JOINER) — split on it to find which chips are current.
+const ANSWER_JOINER = '; '
+
+function sameSet(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((i) => b.includes(i))
+}
+
 // Client Workspaces (Phase 5, D21/D22) — the right-hand work panel: Profile
 // fills in live as intake answers land, Research/Cases show once those
 // steps have run. Ported layout from the approved design; data is real
@@ -67,9 +78,7 @@ export default function WorkPanel({
   // Resolves to whether the server accepted the edit. A `false` keeps the
   // pending chips and edit mode on screen so the client can see what failed
   // and retry, instead of the correction silently disappearing.
-  onSaveProfile: (
-    updates: { field: string; option_index?: number; option_indices?: number[]; free_text?: string }[]
-  ) => Promise<boolean>
+  onSaveProfile: (updates: ProfileUpdate[]) => Promise<boolean>
   savingProfile: boolean
   profileError: string
   // engagement_steps.progress_current for the interview step, straight from
@@ -85,12 +94,26 @@ export default function WorkPanel({
   const [editMode, setEditMode] = useState(false)
   const [pending, setPending] = useState<Record<string, PendingEdit>>({})
 
+  // Which chips are the saved answer for a field. A multi-select answer is
+  // stored joined with ANSWER_JOINER, so it can match several chips; a
+  // single-select answer matches at most one. Matched on `value` (what the
+  // server stores) with the Thai `label` only as a fallback for an older
+  // payload. Empty for a free-text answer that matches no chip.
+  function currentIndicesOf(field: IntakeField): number[] {
+    const current = fields[field.key] || ''
+    if (!current) return []
+    const parts = field.multi_select ? current.split(ANSWER_JOINER) : [current]
+    return field.options.filter((o) => parts.includes(o.value ?? o.label)).map((o) => o.index)
+  }
+
   function pickChip(field: IntakeField, option: { index: number; label: string }) {
     if (field.multi_select) {
       // Toggle the chip in/out of the pending set; the row's preview label
-      // joins the picked labels the same way the server will ("; ").
+      // joins the picked labels the same way the server will ("; "). The
+      // first tap starts from the saved set, so it adds/removes one chip
+      // instead of silently dropping every other current answer.
       setPending((prev) => {
-        const current = prev[field.key]?.option_indices ?? []
+        const current = prev[field.key]?.option_indices ?? currentIndicesOf(field)
         const next = current.includes(option.index)
           ? current.filter((i) => i !== option.index)
           : [...current, option.index].sort((a, b) => a - b)
@@ -115,23 +138,46 @@ export default function WorkPanel({
     setPending({})
     setEditMode(false)
   }
+  // The pending entries that would actually change something. Tapping the chip
+  // that is already the answer, or typing the answer back verbatim, is a no-op:
+  // it must not arm Save, because saving re-runs the market scan and redrafts
+  // the plan (ClientWorkspace.tsx::handleSaveProfile) — an expensive round trip
+  // for an unchanged profile. An emptied free-text box is a no-op too.
+  function effectiveUpdates(): ProfileUpdate[] {
+    return Object.entries(pending).flatMap(([field, v]): ProfileUpdate[] => {
+      const current = fields[field] || ''
+      const def = intakeFields.find((f) => f.key === field)
+      if (v.option_indices !== undefined) {
+        if (v.option_indices.length === 0) return []
+        // Same set as what is saved (in any order) stores the same joined
+        // value — resolve_answers() sorts by ordinal, so compare as a set.
+        if (def && sameSet(v.option_indices, currentIndicesOf(def))) return []
+        return [{ field, option_indices: v.option_indices }]
+      }
+      if (v.option_index !== undefined) {
+        const opt = def?.options.find((o) => o.index === v.option_index)
+        // `value` is what the server stores for that chip; `label` is only a
+        // fallback for an older payload that predates it.
+        const resolved = opt?.value ?? opt?.label ?? ''
+        return resolved && resolved === current ? [] : [{ field, option_index: v.option_index }]
+      }
+      const text = (v.free_text ?? '').trim()
+      return !text || text === current ? [] : [{ field, free_text: text }]
+    })
+  }
+
   async function saveEdit() {
-    const updates = Object.entries(pending)
-      .filter(
-        ([, v]) =>
-          v.option_index !== undefined || (v.option_indices?.length ?? 0) > 0 || (v.free_text ?? '').trim()
-      )
-      .map(([field, v]) => ({
-        field,
-        option_index: v.option_index,
-        option_indices: v.option_indices,
-        free_text: v.free_text,
-      }))
+    const updates = effectiveUpdates()
+    if (updates.length === 0) return // Save is disabled in this state anyway
     const ok = await onSaveProfile(updates)
     if (!ok) return // keep `pending` and edit mode — profileError explains why
     setPending({})
     setEditMode(false)
   }
+
+  // Save stays disabled until at least one pending entry is a real change —
+  // not merely a tap (see effectiveUpdates).
+  const dirty = effectiveUpdates().length > 0
 
   const researchLocked = !navigable.market
   const casesLocked = !navigable.cases
@@ -214,6 +260,14 @@ export default function WorkPanel({
             <div style={{ height: 4, borderRadius: 2, background: 'var(--surface-sunk)', overflow: 'hidden' }}>
               <div style={{ height: '100%', background: 'var(--accent)', width: `${pct}%`, transition: 'width .5s ease' }} />
             </div>
+            {editMode && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)' }}>
+                <span style={{ display: 'inline-flex', color: 'var(--accent)' }}>
+                  <Ic.check size={11} strokeWidth={2} />
+                </span>
+                marks your current answer — tap another chip to replace it (or toggle chips on a multi-choice question).
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {intakeFields.map((f, idx) => {
                 // The backend's own rule, verbatim: a question is correctable
@@ -224,6 +278,34 @@ export default function WorkPanel({
                 // offer chips the PATCH then rejects with a 400.
                 const answered = idx < intakeStep
                 const edit = pending[f.key]
+                const current = fields[f.key] || ''
+                // Which chips are the saved answer, so edit mode can keep them
+                // marked. Every option used to render identically once edit
+                // mode opened, so a mis-tap was invisible — you couldn't see
+                // what you were about to overwrite. One index for a single-
+                // select field, several for a multi-select one.
+                const currentIndices = currentIndicesOf(f)
+                // The chips a pending edit has picked, in either shape;
+                // undefined while the pending entry is free text (or absent).
+                const pendingIndices =
+                  edit?.option_indices !== undefined
+                    ? edit.option_indices
+                    : edit?.option_index !== undefined
+                      ? [edit.option_index]
+                      : undefined
+                // A pending edit only counts as a change once it has text —
+                // an emptied free-text box is not yet a new answer. Re-tapping
+                // the chip(s) that already are the answer isn't one either:
+                // the Thai label never equals the stored English value, so
+                // without this the row would show a bogus "old → new".
+                const nextLabel = (edit?.label ?? '').trim()
+                const reAffirmed = pendingIndices !== undefined && sameSet(pendingIndices, currentIndices)
+                const changed = !!nextLabel && !!current && !reAffirmed && nextLabel !== current
+                const freeText = (edit?.free_text ?? '').trim()
+                const freeTextChanged = !!freeText && freeText !== current
+                // An answer that matches no chip was typed — the input is
+                // where its "current" marker has to live.
+                const freeTextIsCurrent = currentIndices.length === 0 && !!current
                 return (
                   <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
                     <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -238,19 +320,46 @@ export default function WorkPanel({
                         {f.label}
                       </div>
                       <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.5, color: answered ? 'var(--ink)' : 'var(--ink-4)' }}>
-                        {edit ? edit.label : fields[f.key] || 'not asked yet'}
+                        {changed ? (
+                          // old → new, so a wrong tap is obvious before Save
+                          // commits it (saving re-runs research and the plan).
+                          <>
+                            <span style={{ color: 'var(--ink-4)', textDecoration: 'line-through' }}>{current}</span>
+                            <span style={{ color: 'var(--ink-4)' }}> → </span>
+                            <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{nextLabel}</span>
+                          </>
+                        ) : (
+                          (reAffirmed ? current : nextLabel) || current || 'not asked yet'
+                        )}
                       </div>
                     </div>
                     {editMode && answered && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 6, paddingLeft: 25 }}>
                         {f.options.map((o) => {
-                          const picked =
-                            edit?.option_index === o.index ||
-                            (edit?.option_indices?.includes(o.index) ?? false)
+                          // Stays marked even while another chip is picked —
+                          // seeing the answer you are replacing is the whole
+                          // point of the marker.
+                          const isCurrent = currentIndices.includes(o.index)
+                          const pickedNow = pendingIndices?.includes(o.index) ?? false
+                          // Three accent states, no grey: an answer that is
+                          // already chosen reads as chosen.
+                          //   current      — accent tint + ✓ (what is saved)
+                          //   replacement  — solid accent (what Save will store)
+                          //   superseded   — a current one, faded, once it is
+                          //                  no longer in the pending pick (or
+                          //                  free text replaces the answer)
+                          // On a multi-select field the pending pick is a set,
+                          // so a current chip only fades when toggled out.
+                          const replacement = pickedNow && !isCurrent
+                          const superseded =
+                            isCurrent && ((pendingIndices !== undefined && !pickedNow) || freeTextChanged)
+                          const selected = isCurrent || replacement
                           return (
                             <button
                               key={o.index}
                               onClick={() => pickChip(f, o)}
+                              aria-pressed={selected && !superseded}
+                              title={isCurrent ? 'Your current answer' : undefined}
                               style={{
                                 // A long option (Thai copy runs long) has to wrap
                                 // inside the pill, not spill past it — so this is
@@ -258,11 +367,24 @@ export default function WorkPanel({
                                 // height.
                                 minHeight: 24,
                                 maxWidth: '100%',
+                                display: 'inline-flex',
+                                alignItems: 'flex-start',
+                                gap: 4,
                                 padding: '3px 9px',
                                 borderRadius: 12,
-                                border: picked ? '1px solid var(--accent)' : '1px solid var(--line-2)',
-                                background: picked ? 'var(--accent-weak)' : 'var(--surface)',
-                                color: picked ? 'var(--accent)' : 'var(--ink-2)',
+                                border: selected ? '1px solid var(--accent)' : '1px solid var(--line-2)',
+                                background: replacement
+                                  ? 'var(--accent)'
+                                  : isCurrent
+                                    ? 'var(--accent-weak)'
+                                    : 'var(--surface)',
+                                color: replacement
+                                  ? 'var(--accent-ink)'
+                                  : isCurrent
+                                    ? 'var(--accent)'
+                                    : 'var(--ink-2)',
+                                fontWeight: selected ? 500 : 400,
+                                opacity: superseded ? 0.5 : 1,
                                 fontSize: 11,
                                 lineHeight: 1.45,
                                 textAlign: 'left',
@@ -271,23 +393,34 @@ export default function WorkPanel({
                                 cursor: 'pointer',
                               }}
                             >
-                              {o.label}
+                              {isCurrent && (
+                                <span style={{ flex: 'none', display: 'inline-flex', marginTop: 2, color: 'var(--accent)' }}>
+                                  <Ic.check size={11} strokeWidth={2} />
+                                </span>
+                              )}
+                              <span style={{ minWidth: 0 }}>{o.label}</span>
                             </button>
                           )
                         })}
                         <input
                           defaultValue=""
-                          placeholder="Type your own…"
+                          placeholder={freeTextIsCurrent ? `Now: ${current}` : 'Type your own…'}
                           onChange={(e) => typeFreeText(f.key, e.target.value)}
                           style={{
                             height: 24,
                             minWidth: 90,
                             flex: 1,
-                            border: '1px solid var(--line-2)',
+                            // Same accent language as the chips: a free-text
+                            // answer that is already the saved one gets the
+                            // tint, a typed change gets the accent outline.
+                            border:
+                              freeTextChanged || freeTextIsCurrent
+                                ? '1px solid var(--accent)'
+                                : '1px solid var(--line-2)',
                             borderRadius: 99,
                             padding: '0 9px',
                             fontSize: 11,
-                            background: 'var(--surface)',
+                            background: freeTextIsCurrent && !freeTextChanged ? 'var(--accent-weak)' : 'var(--surface)',
                             color: 'var(--ink)',
                           }}
                         />
@@ -306,7 +439,8 @@ export default function WorkPanel({
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={() => void saveEdit()}
-                  disabled={savingProfile || Object.keys(pending).length === 0}
+                  disabled={savingProfile || !dirty}
+                  title={!dirty ? 'Pick a different answer first — nothing has changed yet' : undefined}
                   style={{
                     flex: 1,
                     height: 32,
@@ -316,8 +450,8 @@ export default function WorkPanel({
                     color: '#fff',
                     fontSize: 12.5,
                     fontWeight: 500,
-                    cursor: savingProfile || Object.keys(pending).length === 0 ? 'default' : 'pointer',
-                    opacity: savingProfile || Object.keys(pending).length === 0 ? 0.6 : 1,
+                    cursor: savingProfile || !dirty ? 'default' : 'pointer',
+                    opacity: savingProfile || !dirty ? 0.6 : 1,
                   }}
                 >
                   {savingProfile ? 'Saving…' : 'Save & regenerate plan'}
