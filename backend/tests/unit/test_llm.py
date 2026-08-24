@@ -7,7 +7,7 @@ import pytest
 
 from app.llm.base import ChatChunk, ChatMessage, LLMProviderError
 from app.llm.llamacpp import LlamaCppClient
-from app.llm.router import LOCAL_MODEL_CODE, LLMRouter
+from app.llm.router import DEFAULT_MODEL_CODE, LLMRouter
 
 
 # ---------------------------------------------------------------------------
@@ -175,20 +175,25 @@ async def test_stream_chat_skips_malformed_sse():
 # LLMRouter tests
 # ---------------------------------------------------------------------------
 
-def test_router_returns_local_client():
-    router = LLMRouter(primary_url="http://localhost:8080")
-    client = router.get(LOCAL_MODEL_CODE)
+def _router() -> LLMRouter:
+    return LLMRouter(DEFAULT_MODEL_CODE, LlamaCppClient(base_url="http://localhost:8080"))
+
+
+def test_router_returns_default_client():
+    router = _router()
+    client = router.get(DEFAULT_MODEL_CODE)
     assert client is not None
+    assert router.default_code == DEFAULT_MODEL_CODE
 
 
 def test_router_unknown_model_raises():
-    router = LLMRouter(primary_url="http://localhost:8080")
+    router = _router()
     with pytest.raises(KeyError, match="claude-sonnet-4"):
         router.get("claude-sonnet-4")
 
 
 def test_router_register_and_retrieve():
-    router = LLMRouter(primary_url="http://localhost:8080")
+    router = _router()
     fake_client = MagicMock()
     router.register("test-model", fake_client)
     assert router.get("test-model") is fake_client

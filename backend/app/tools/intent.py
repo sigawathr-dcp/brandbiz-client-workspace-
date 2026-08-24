@@ -87,10 +87,10 @@ async def classify_intent(text: str) -> str | None:
     follows immediately after classification.
     """
     from app.llm.base import ChatMessage
-    from app.llm.router import LOCAL_MODEL_CODE, get_router
+    from app.llm.router import DEFAULT_MODEL_CODE, get_router
 
     try:
-        client = get_router().get(LOCAL_MODEL_CODE)
+        client = get_router().get(DEFAULT_MODEL_CODE)
         label = ""
         async for chunk in client.stream_chat(
             [

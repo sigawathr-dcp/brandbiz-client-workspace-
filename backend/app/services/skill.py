@@ -457,10 +457,10 @@ async def draft_skill(messages: list[dict]) -> dict:
     Returns {"done": bool, "message": str | None, "draft": dict | None}.
     """
     from app.llm.base import ChatMessage
-    from app.llm.router import LOCAL_MODEL_CODE, get_router
+    from app.llm.router import DEFAULT_MODEL_CODE, get_router
 
     try:
-        client = get_router().get(LOCAL_MODEL_CODE)
+        client = get_router().get(DEFAULT_MODEL_CODE)
         chat_messages = [ChatMessage(role="system", content=_DRAFT_SYSTEM)]
         for m in messages:
             role = m.get("role")

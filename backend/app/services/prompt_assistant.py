@@ -5,7 +5,7 @@ G-A4 Prompt Assistant: rewrites a user's lazy draft into a better-structured
 prompt before it's ever sent as a chat turn.
 
 Modeled line-for-line on app/services/skill_selector.py — only the local
-model is used (LOCAL_MODEL_CODE), which is always policy-allowed and free,
+model is used (DEFAULT_MODEL_CODE), which is always policy-allowed and free,
 so this adds no external call, no quota, and no PolicyEngine.decide() call
 (§7.2 untouched; the eventual "Use this" send still goes through the normal
 POST /chat -> prepare_chat -> PolicyEngine.decide() path).
@@ -47,7 +47,7 @@ async def rewrite_prompt(draft: str, agent_instructions: str | None = None) -> s
     never blocks the composer.
     """
     from app.llm.base import ChatMessage
-    from app.llm.router import LOCAL_MODEL_CODE, get_router
+    from app.llm.router import DEFAULT_MODEL_CODE, get_router
 
     truncated = draft[:MAX_DRAFT_CHARS]
     user_content = truncated
@@ -55,7 +55,7 @@ async def rewrite_prompt(draft: str, agent_instructions: str | None = None) -> s
         user_content = f"Assistant's domain: {agent_instructions}\n\nDraft: {truncated}"
 
     try:
-        client = get_router().get(LOCAL_MODEL_CODE)
+        client = get_router().get(DEFAULT_MODEL_CODE)
         raw = ""
         async for chunk in client.stream_chat(
             [

@@ -39,7 +39,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.models.classification import DataTier
 from app.models.department import UserDepartment
 from app.models.model_catalog import ModelCatalog
@@ -88,8 +88,12 @@ class PolicyEngine:
         detected_tier: DataTier,
         estimated_input_tokens: int,
     ) -> PolicyDecision:
-        # ---- Rule 1: Local model is always allowed (modulo Tier 4 role check) ----
-        if requested_model == LOCAL_MODEL_CODE:
+        # ---- Rule 1: Default model is always allowed (modulo Tier 4 role check) ----
+        # D25: the default is the hosted OpenAI model, not the on-prem one, and
+        # the owner accepted Tier 3/4 data going to it. Quota is still consumed
+        # after the call (orchestrator.call_llm); it is not pre-checked here so
+        # the baseline model can never be "quota-denied" — only exotic models are.
+        if requested_model == DEFAULT_MODEL_CODE:
             if detected_tier == DataTier.TIER_4_RESTRICTED and user.role not in L5_AND_ABOVE:
                 return PolicyDecision(
                     allowed=False,
@@ -98,7 +102,7 @@ class PolicyEngine:
                 )
             return PolicyDecision(
                 allowed=True,
-                model_code=LOCAL_MODEL_CODE,
+                model_code=DEFAULT_MODEL_CODE,
                 reasons=["local_always_allowed"],
             )
 
@@ -109,13 +113,15 @@ class PolicyEngine:
         if not model.is_active:
             return PolicyDecision(False, "", [DenyReason.MODEL_INACTIVE])
 
-        # ---- Rule 2: Tier 3/4 must stay local (silent downgrade) ----
+        # ---- Rule 2: Tier 3/4 stay on the default model (silent downgrade) ----
+        # Non-default vendors (Claude, Gemini, Perplexity, Hermes) never see
+        # confidential/restricted data; the downgrade target is DEFAULT_MODEL_CODE.
         if detected_tier in (DataTier.TIER_3_CONFIDENTIAL, DataTier.TIER_4_RESTRICTED):
             if detected_tier == DataTier.TIER_4_RESTRICTED and user.role not in L5_AND_ABOVE:
                 return PolicyDecision(False, "", [DenyReason.TIER_4_REQUIRES_L5])
             return PolicyDecision(
                 allowed=True,
-                model_code=LOCAL_MODEL_CODE,
+                model_code=DEFAULT_MODEL_CODE,
                 reasons=[DenyReason.TIER_BLOCKS_EXTERNAL],
                 downgrade_to_local=True,
             )
@@ -125,7 +131,7 @@ class PolicyEngine:
         if requested_model not in allowed_models:
             return PolicyDecision(
                 allowed=True,
-                model_code=LOCAL_MODEL_CODE,
+                model_code=DEFAULT_MODEL_CODE,
                 reasons=[DenyReason.ROLE_NOT_ALLOWED],
                 downgrade_to_local=True,
             )

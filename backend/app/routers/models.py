@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.deps import get_current_user
-from app.llm.router import LOCAL_MODEL_CODE, get_router
+from app.llm.router import DEFAULT_MODEL_CODE, get_router
 from app.models.department import UserDepartment
 from app.models.model_catalog import ModelCatalog
 from app.models.permission import DepartmentModelPermission, RoleModelPermission
@@ -43,20 +43,19 @@ async def available_models(
 ) -> list[ModelOption]:
     """Return models the current user is allowed to request.
 
-    Local model is always included first. External models are the union of
-    role-based and department-based permissions (D19).
+    The default model is always included first (Policy rule 1). External
+    models are the union of role-based and department-based permissions (D19).
     """
-    # Local model — always available (Policy rule 1)
-    local_row = (await session.execute(
-        select(ModelCatalog).where(ModelCatalog.code == LOCAL_MODEL_CODE)
+    default_row = (await session.execute(
+        select(ModelCatalog).where(ModelCatalog.code == DEFAULT_MODEL_CODE)
     )).scalar_one_or_none()
 
     local = ModelOption(
-        code=LOCAL_MODEL_CODE,
-        display_name=local_row.display_name if local_row else "Local (Qwen)",
-        provider="local",
-        is_local=True,
-        supports_reasoning=_supports_reasoning(LOCAL_MODEL_CODE),
+        code=DEFAULT_MODEL_CODE,
+        display_name=default_row.display_name if default_row else DEFAULT_MODEL_CODE,
+        provider=default_row.provider if default_row else "openai",
+        is_local=default_row.is_local if default_row else False,
+        supports_reasoning=_supports_reasoning(DEFAULT_MODEL_CODE),
     )
 
     # Role-level external permissions
@@ -94,7 +93,9 @@ async def available_models(
             .order_by(ModelCatalog.provider, ModelCatalog.display_name)
         )).scalars().all()
 
-    seen: set[str] = set()
+    # D25: the default model is an external (openai) catalog row granted to
+    # every role, so it would surface again here — keep it to the head slot.
+    seen: set[str] = {DEFAULT_MODEL_CODE}
     external: list[ModelOption] = []
     for row in list(role_rows) + list(dept_rows):
         if row.code not in seen:

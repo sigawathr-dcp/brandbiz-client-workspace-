@@ -15,6 +15,8 @@ services:
       POSTGRES_DB: brandbiz
       POSTGRES_USER: brandbiz
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    ports:
+      - "5433:5432"  # host port for DBeaver etc. (5432 is used by another stack)
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -39,12 +41,18 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}
       JWT_SECRET: ${JWT_SECRET:?required}
+      # D25 — OpenAI is the default chat + embedding provider.
+      LLM_DEFAULT_PROVIDER: ${LLM_DEFAULT_PROVIDER:-openai}
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-gpt-5.4-mini-2026-03-17}
+      LLM_DEFAULT_SUPPORTS_REASONING: ${LLM_DEFAULT_SUPPORTS_REASONING:-true}
+      LLM_EMBED_PROVIDER: ${LLM_EMBED_PROVIDER:-openai}
+      # Local fallback (LLM_DEFAULT_PROVIDER=local)
       LLM_PRIMARY_URL: ${LLM_PRIMARY_URL:-http://192.168.20.18:12341}
       LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-gemma4:26b}
       # Embedding server — point at the same Ollama host; model must be pulled first
       # e.g. `ollama pull bge-m3:latest` on the server
       LLM_EMBED_URL: ${LLM_EMBED_URL:-http://192.168.20.18:12341}
-      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-bge-m3:latest}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:-text-embedding-3-small}
       # Release VRAM after each request so models share one GPU on demand.
       LLM_KEEP_ALIVE: ${LLM_KEEP_ALIVE:-0}
       # Local blob storage (volume-mounted below)

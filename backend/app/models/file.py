@@ -100,8 +100,9 @@ class FileChunk(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # 1024-dimensional BGE-M3 vector (HNSW index created by 0001_baseline).
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
+    # 1536-dimensional OpenAI text-embedding-3-small vector (D25; HNSW index
+    # rebuilt by migration 0066 — was 1024-dim BGE-M3).
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

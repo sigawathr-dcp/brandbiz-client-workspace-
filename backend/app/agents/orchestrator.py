@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crypto
 from app.llm.base import ChatMessage
-from app.llm.router import LOCAL_MODEL_CODE, get_router
+from app.llm.router import DEFAULT_MODEL_CODE, default_model_is_free, get_router
 from app.llm.tuning import GenerationTuning
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -287,8 +287,9 @@ async def call_llm(state: ChatState) -> dict:
         },
     )
 
-    # §7.5: commit actual token usage — external calls only, skip local LLM
-    if model_code != LOCAL_MODEL_CODE and user is not None:
+    # §7.5: commit actual token usage. D25: the default model is hosted
+    # (OpenAI) and therefore charged too; only an on-prem default is free.
+    if user is not None and not (model_code == DEFAULT_MODEL_CODE and default_model_is_free()):
         t_in = tokens_input or 0
         t_out = tokens_output or 0
         if t_in > 0 or t_out > 0:

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.models.classification import DataTier
 from app.models.user import User
 from app.services.policy_engine import DenyReason, PolicyDecision, PolicyEngine
@@ -87,23 +87,23 @@ class TestLocalModelAlwaysAllowed:
         session = AsyncMock()
         engine = PolicyEngine(session)
         decision = await engine.decide(
-            _mock_user("L1"), LOCAL_MODEL_CODE, DataTier.TIER_1_PUBLIC, 100
+            _mock_user("L1"), DEFAULT_MODEL_CODE, DataTier.TIER_1_PUBLIC, 100
         )
         assert decision.allowed is True
-        assert decision.model_code == LOCAL_MODEL_CODE
+        assert decision.model_code == DEFAULT_MODEL_CODE
         assert decision.downgrade_to_local is False
 
     async def test_local_tier2_allowed(self):
         session = AsyncMock()
         decision = await PolicyEngine(session).decide(
-            _mock_user("L1"), LOCAL_MODEL_CODE, DataTier.TIER_2_INTERNAL, 100
+            _mock_user("L1"), DEFAULT_MODEL_CODE, DataTier.TIER_2_INTERNAL, 100
         )
         assert decision.allowed is True
 
     async def test_local_tier3_allowed(self):
         session = AsyncMock()
         decision = await PolicyEngine(session).decide(
-            _mock_user("L3"), LOCAL_MODEL_CODE, DataTier.TIER_3_CONFIDENTIAL, 100
+            _mock_user("L3"), DEFAULT_MODEL_CODE, DataTier.TIER_3_CONFIDENTIAL, 100
         )
         assert decision.allowed is True
 
@@ -112,7 +112,7 @@ class TestTier4RequiresL5:
     async def test_local_tier4_low_role_denied(self):
         session = AsyncMock()
         decision = await PolicyEngine(session).decide(
-            _mock_user("L3"), LOCAL_MODEL_CODE, DataTier.TIER_4_RESTRICTED, 100
+            _mock_user("L3"), DEFAULT_MODEL_CODE, DataTier.TIER_4_RESTRICTED, 100
         )
         assert decision.allowed is False
         assert DenyReason.TIER_4_REQUIRES_L5 in decision.reasons
@@ -120,14 +120,14 @@ class TestTier4RequiresL5:
     async def test_local_tier4_l5_allowed(self):
         session = AsyncMock()
         decision = await PolicyEngine(session).decide(
-            _mock_user("L5"), LOCAL_MODEL_CODE, DataTier.TIER_4_RESTRICTED, 100
+            _mock_user("L5"), DEFAULT_MODEL_CODE, DataTier.TIER_4_RESTRICTED, 100
         )
         assert decision.allowed is True
 
     async def test_local_tier4_admin_allowed(self):
         session = AsyncMock()
         decision = await PolicyEngine(session).decide(
-            _mock_user("ADMIN"), LOCAL_MODEL_CODE, DataTier.TIER_4_RESTRICTED, 100
+            _mock_user("ADMIN"), DEFAULT_MODEL_CODE, DataTier.TIER_4_RESTRICTED, 100
         )
         assert decision.allowed is True
 
@@ -169,7 +169,7 @@ class TestTierBlocksExternal:
             _mock_user("L3"), "claude-sonnet-4", DataTier.TIER_3_CONFIDENTIAL, 100
         )
         assert decision.allowed is True
-        assert decision.model_code == LOCAL_MODEL_CODE
+        assert decision.model_code == DEFAULT_MODEL_CODE
         assert decision.downgrade_to_local is True
         assert DenyReason.TIER_BLOCKS_EXTERNAL in decision.reasons
 
@@ -179,7 +179,7 @@ class TestTierBlocksExternal:
             _mock_user("L5"), "claude-sonnet-4", DataTier.TIER_4_RESTRICTED, 100
         )
         assert decision.allowed is True
-        assert decision.model_code == LOCAL_MODEL_CODE
+        assert decision.model_code == DEFAULT_MODEL_CODE
         assert decision.downgrade_to_local is True
 
 
@@ -195,7 +195,7 @@ class TestRoleNotAllowed:
             _mock_user("L1"), "claude-sonnet-4", DataTier.TIER_1_PUBLIC, 100
         )
         assert decision.allowed is True
-        assert decision.model_code == LOCAL_MODEL_CODE
+        assert decision.model_code == DEFAULT_MODEL_CODE
         assert decision.downgrade_to_local is True
         assert DenyReason.ROLE_NOT_ALLOWED in decision.reasons
 

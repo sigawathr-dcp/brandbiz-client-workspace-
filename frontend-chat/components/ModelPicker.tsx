@@ -44,7 +44,7 @@ export default function ModelPicker({ value, onChange }: ModelPickerProps) {
   }, [])
 
   const options: ModelOption[] = [
-    { code: 'auto', display_name: 'Auto (local)', provider: 'local', is_local: true },
+    { code: 'auto', display_name: 'Auto', provider: 'auto', is_local: false },
     ...models.filter(m => !m.is_local),
   ]
 

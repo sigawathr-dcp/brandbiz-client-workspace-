@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.deps import get_principal
 from app.llm.base import LLMProviderError
-from app.llm.router import LOCAL_MODEL_CODE, get_router
+from app.llm.router import DEFAULT_MODEL_CODE, default_model_is_free, get_router
 from app.models.model_catalog import ModelCatalog
 from app.models.user import User
 from app.services import audit as audit_svc
@@ -163,10 +163,10 @@ async def list_models(
 
     # Local model — always available
     local_row = (await session.execute(
-        select(ModelCatalog).where(ModelCatalog.code == LOCAL_MODEL_CODE)
+        select(ModelCatalog).where(ModelCatalog.code == DEFAULT_MODEL_CODE)
     )).scalar_one_or_none()
 
-    allowed_codes: list[str] = [LOCAL_MODEL_CODE]
+    allowed_codes: list[str] = [DEFAULT_MODEL_CODE]
 
     # Role-based permissions
     role_rows = (await session.execute(
@@ -214,7 +214,9 @@ async def list_models(
             {
                 "id": code,
                 "object": "model",
-                "owned_by": "local" if code == LOCAL_MODEL_CODE else "api-gateway",
+                "owned_by": (
+                    "local" if code == DEFAULT_MODEL_CODE and default_model_is_free() else "api-gateway"
+                ),
             }
             for code in unique_codes
         ],
@@ -263,7 +265,7 @@ async def create_chat_completion(
     # ------------------------------------------------------------------
     requested_model = body.model
     if requested_model == "auto" or not requested_model:
-        requested_model = await classify_intent(text) or LOCAL_MODEL_CODE
+        requested_model = await classify_intent(text) or DEFAULT_MODEL_CODE
 
     decision = await PolicyEngine(session).decide(user, requested_model, tier, est_tokens)
 
@@ -372,7 +374,7 @@ async def create_chat_completion(
                     "source": "n8n",
                 },
             )
-            if decision.model_code != LOCAL_MODEL_CODE and (tokens_input > 0 or tokens_output > 0):
+            if _is_billable(decision.model_code) and (tokens_input > 0 or tokens_output > 0):
                 cost = await _compute_cost(session, decision.model_code, tokens_input, tokens_output)
                 await quota_svc.consume(session, user, tokens_input, tokens_output, cost)
             await session.commit()
@@ -412,9 +414,14 @@ async def create_chat_completion(
             "source": "n8n",
         },
     )
-    if decision.model_code != LOCAL_MODEL_CODE and (tokens_input > 0 or tokens_output > 0):
+    if _is_billable(decision.model_code) and (tokens_input > 0 or tokens_output > 0):
         cost = await _compute_cost(session, decision.model_code, tokens_input, tokens_output)
         await quota_svc.consume(session, user, tokens_input, tokens_output, cost)
 
     await session.commit()
     return JSONResponse(result)
+
+
+def _is_billable(model_code: str) -> bool:
+    """D25: everything is charged except an on-prem default model."""
+    return not (model_code == DEFAULT_MODEL_CODE and default_model_is_free())

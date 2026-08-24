@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.services.chat_policy import prepare_chat
 
 
@@ -52,7 +52,7 @@ def _make_skill(name: str, instructions: str) -> MagicMock:
     return skill
 
 
-def _allowed_decision(model_code: str = LOCAL_MODEL_CODE, downgrade: bool = False):
+def _allowed_decision(model_code: str = DEFAULT_MODEL_CODE, downgrade: bool = False):
     from app.services.policy_engine import PolicyDecision
     return PolicyDecision(
         allowed=True, model_code=model_code, downgrade_to_local=downgrade, reasons=[],
@@ -97,7 +97,7 @@ async def _run_prepare(
 
     with patch("app.services.chat_policy.PolicyEngine") as mock_pe, \
          patch("app.services.chat_policy.rag_search") as mock_rag, \
-         patch("app.services.chat_policy.classify_intent", new_callable=AsyncMock, return_value=LOCAL_MODEL_CODE), \
+         patch("app.services.chat_policy.classify_intent", new_callable=AsyncMock, return_value=DEFAULT_MODEL_CODE), \
          patch("app.services.chat_policy.settings") as mock_settings, \
          patch("app.services.chat_policy.alert") as mock_alert, \
          patch("app.services.chat_policy.agent_svc.get_agent", new_callable=AsyncMock, return_value=agent), \
@@ -207,7 +207,7 @@ class TestPolicyStillGates:
     async def test_downgrade_decision_still_applies_with_skill_active(self):
         """§7.2: skill selection must never bypass PolicyEngine.decide()."""
         skill = _make_skill("weekly-report", "Summarize the week.")
-        downgrade_decision = _allowed_decision(model_code=LOCAL_MODEL_CODE, downgrade=True)
+        downgrade_decision = _allowed_decision(model_code=DEFAULT_MODEL_CODE, downgrade=True)
 
         prepared, _ = await _run_prepare(
             user_content="/weekly-report numbers please",
@@ -216,7 +216,7 @@ class TestPolicyStillGates:
             decision=downgrade_decision,
         )
 
-        assert prepared.model_code == LOCAL_MODEL_CODE
+        assert prepared.model_code == DEFAULT_MODEL_CODE
         assert prepared.downgrade_to_local is True
         # the skill still applies — downgrade and skill injection are orthogonal
         assert "# Skill: weekly-report" in prepared.system_prompt

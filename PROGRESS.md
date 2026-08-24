@@ -2773,3 +2773,79 @@ Committed on `fix/case-library-scope` (not pushed).
 - [ ] Carried: missing FKs on `engagements.active_plan_id`/`conversations.engagement_id`; dead `plan_versions.budget`/`provenance` columns; 3 index-naming mismatches
 - [ ] Carried: `0051`/`0054`/`0055`/`0057` backfills lack defensive checks for unresolvable rows
 - [ ] Carried: long-tail backlog (ground-truth labels; placeholder rate card; prompt-injection pass; secrets rotation; `COOKIE_SECURE`+TLS; server-spec.md deck headings; `production_improvement.md` #18–25; remaining G-tasks)
+
+## 2026-08-25 05:14 — fix/case-library-scope @ af4d528
+
+**Summary:** Switched the gateway's default chat model and embeddings from the on-prem Ollama/llama.cpp
+stack to OpenAI (D25): `LLM_DEFAULT_PROVIDER=openai`, `LLM_DEFAULT_MODEL=gpt-5.4-mini-2026-03-17`,
+`LLM_EMBED_PROVIDER=openai` / `text-embedding-3-small` (1536 dims). `LOCAL_MODEL_CODE` became the
+settings-driven `DEFAULT_MODEL_CODE` (alias kept), PolicyEngine Rule 2 now downgrades Tier 3/4 to the
+default model (owner accepted the PDPA implication), the default model is billed unless the provider is
+`local`, and helper calls' Ollama kwargs are translated inside `OpenAIClient`. Migration 0066 adds the
+catalog row, re-points every agent, and rebuilds `file_chunks.embedding` as VECTOR(1536) — all files must
+be re-ingested. Unit suite: 1046 passed; the 16 failures are the pre-existing env-dependent set.
+`tsc --noEmit` clean. Uncommitted.
+
+**Files changed:**
+- `backend/app/config.py` — `llm_default_provider/model/supports_reasoning`, `llm_embed_provider`, new embed defaults
+- `backend/app/llm/router.py` — `DEFAULT_MODEL_CODE` from settings, `default_model_is_free()`, `LLMRouter(default_code, default_client)`, provider-selected default client
+- `backend/app/llm/openai.py` — `_translate_opts` (num_predict→max_completion_tokens, drop keep_alive), `ping()`, no temperature on reasoning models, `max_completion_tokens` in raw paths
+- `backend/app/llm/embeddings.py` — `OpenAIEmbeddingClient`, `Embedder` protocol, `EMBEDDING_DIMS=1536`, provider switch in `get_embedder()`
+- `backend/app/models/file.py` — `Vector(1536)`
+- `backend/alembic/versions/0066_openai_default_model.py` — new: catalog row + role grants, agents reset, embedding column 1024→1536 + HNSW rebuild, `files.is_processed=FALSE`
+- `backend/app/services/policy_engine.py` — Rule 1/2 comments; downgrade target is the default model
+- `backend/app/agents/orchestrator.py`, `backend/app/routers/openai_compat.py` — quota consumed for the default model unless free (`_is_billable`)
+- `backend/app/main.py` — startup ping/log is provider-agnostic
+- `backend/app/routers/models.py` — default option from catalog row; deduped from external list
+- `backend/app/services/{chat_policy,prompt_assistant,skill,skill_selector}.py`, `backend/app/tools/intent.py` — rename to `DEFAULT_MODEL_CODE`
+- `backend/tests/unit/test_default_provider.py` — new: 12 tests (opts translation, embed client, router selection, billing predicate)
+- `backend/tests/unit/test_llm.py`, `test_orchestrator.py`, `test_openai_llm.py`, `tests/integration/test_quota.py` + 9 other test files — router ctor, billing parametrization, `max_completion_tokens`, rename
+- `.env.example`, `docker-compose.yml` — new LLM_DEFAULT_* / LLM_EMBED_PROVIDER vars, embed default
+- `frontend-chat/components/ModelPicker.tsx`, `frontend-chat/lib/domain.ts` — "Auto" no longer labelled local/free
+- `PLAN.md` — D25 decision row
+
+**Next steps:**
+- [x] New: `.env` set, backend rebuilt, `alembic upgrade head` → 0066, `scripts/reembed_pending.py` re-embedded the 21 library files (27 chunks); the 37 `org` rows without chunks are the `retired-*` set, nothing to re-ingest
+- [x] New: in-container smoke test passed — chat turn (22/4 tokens), intent probe with `max_completion_tokens=10` classified coding→claude-sonnet-4, embed 1536 dims, cosine search returns the Warner cases for a Warner query; `/health` llm=ok
+- [ ] New: decide whether the default model should also be quota *pre-checked* (Rule 1 still never denies it; only post-call consume) and whether client workspace budgets (Rule 5) should gate it
+- [ ] New: README still documents the llama.cpp/BGE-M3 GPU setup; rewrite for the OpenAI default
+- [ ] New: `hermes_ollama_*` settings and the Hermes setup script still assume an Ollama host — unchanged, revisit if Hermes stays
+- [ ] New: commit the D25 change (currently on `fix/case-library-scope`; consider its own branch)
+- [ ] Carried: browser click-through of a LINE seat running Cases after the fix (probe was pipeline-level, not UI)
+- [ ] Carried: `pytest-docker` harness fails on the clean tree — `TestCaseLibraryScope` has never executed
+- [ ] Carried: 16 pre-existing unit failures (`test_audit`, `test_consent`, `test_crypto`, `test_google_llm`, `test_vault_connection`) — env/key dependent; triage
+- [ ] Carried: decide whether to commit the `docker-compose.yml` `5433` port mapping
+- [ ] Carried: 16 `retired-*` catalog rows remain org-scoped to demo; prune or leave
+- [ ] Carried: merge `fix/case-library-scope` → main
+- [ ] Carried: browser click-through of a multi-select interview
+- [ ] Carried: eval harness/goldens still build single-token profiles
+- [ ] Carried: reconcile with `line_plan.md`
+- [ ] Carried: run the integration suite on a host with Docker
+- [ ] Carried: create the LINE Login / MINI App channel + LIFF app and set the three env vars
+- [ ] Carried: LIFF needs public HTTPS — tunnel to 3100 for dev; decide prod host
+- [ ] Carried: `line_plan.md` Phase D, Phase E, and B6 are unbuilt
+- [ ] Carried: decide the admin `/clients` invite UI's fate
+- [ ] Carried: `line_plan.md` / `data_storage_plan.md` untracked at repo root — commit or delete
+- [ ] Carried: `RedeemInvite.tsx`'s hardcoded "น้องภูมิ" loading copy duplicated in `LineLogin.tsx`
+- [ ] Carried: tag the five judgement dimensions
+- [ ] Carried: confirm the Q4-Challenge / Q6-Objective overlap is wanted
+- [ ] Carried: review the two low-confidence secondary industry tags
+- [ ] Carried: sweep `case_match_tag_weight` once labels exist
+- [ ] Carried: rebuild + one live chat turn against a seat with a saved plan
+- [ ] Carried: decide whether `/w/plans/[id]` gets its own chat box
+- [ ] Carried: chat context covers the plan only
+- [ ] Carried: browser click-through of the Profile tab's failure path
+- [x] Carried: `.env`'s `LLM_EMBED_MODEL=bge-m3` vs `bge-m3:latest` mismatch — moot; embed default is now `text-embedding-3-small`
+- [ ] Carried: `.env` contains a live-looking `sk-proj-…` OpenAI key; verify gitignored, consider rotating — now load-bearing for the default model
+- [ ] Carried: no live browser click-through of the redesigned funnel
+- [ ] Carried: `plan_drafts` table exists but nothing writes to it yet
+- [ ] Carried: intake answers still don't become real `Message` rows
+- [ ] Carried: `journey.ts::deriveJourney` still a pure client-side derivation
+- [ ] Carried: no scheduler for `purge_expired_messages.py`
+- [ ] Carried: gap-closure plan Commits 2–4
+- [ ] Carried: amend PLAN.md §7.4 ("first token <2s")
+- [ ] Carried: G-I1 Thai/English switch not built
+- [ ] Carried: `plan_versions` missing `UNIQUE(plan_id, version_no)`
+- [ ] Carried: missing FKs / dead columns / index-naming mismatches
+- [ ] Carried: `0051`/`0054`/`0055`/`0057` backfills lack defensive checks
+- [ ] Carried: long-tail backlog

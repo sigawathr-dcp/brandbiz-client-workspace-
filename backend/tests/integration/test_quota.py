@@ -150,12 +150,13 @@ async def test_external_consume_records_tokens_and_cost(db_engine_sync: str) -> 
 
 @pytest.mark.asyncio
 async def test_local_model_quota_not_decremented(db_engine_sync: str) -> None:
-    """Quota must NOT be touched when the local model is used.
+    """Quota must NOT be touched when an on-prem (free) default model is used.
 
-    This is enforced in orchestrator.call_llm (model_code != LOCAL_MODEL_CODE gate).
-    Here we verify that NOT calling consume() leaves the quota row at zero.
+    Enforced in orchestrator.call_llm via router.default_model_is_free() (D25:
+    a hosted default IS charged). Here we verify that NOT calling consume()
+    leaves the quota row absent.
     """
-    from app.llm.router import LOCAL_MODEL_CODE
+    from app.llm.router import DEFAULT_MODEL_CODE
 
     engine = create_async_engine(db_engine_sync, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -163,7 +164,7 @@ async def test_local_model_quota_not_decremented(db_engine_sync: str) -> None:
     async with factory() as s:
         user_id, role = await _insert_user(s, role="L2")
 
-    # Simulate: orchestrator would skip consume() for LOCAL_MODEL_CODE.
+    # Simulate: orchestrator would skip consume() for DEFAULT_MODEL_CODE.
     # Verify: no quota row created, or row stays at 0.
     async with factory() as s:
         row = (await s.execute(

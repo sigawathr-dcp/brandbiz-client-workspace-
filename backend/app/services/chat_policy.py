@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crypto
 from app.config import settings
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.llm.tuning import GenerationTuning, ReasoningLevel, ResponseMode
 from app.models.classification import DataTier
 from app.models.conversation import Conversation
@@ -358,16 +358,16 @@ async def prepare_chat(
             details={"tier": tier.value},
         )
 
-    # "auto" routes by intent: local LLM classifies the message first; falls back
-    # to regex if the model is unavailable. PolicyEngine still gates the chosen
-    # model (tier/quota/permission) and will silently downgrade to local if denied.
+    # "auto" routes by intent: the default LLM classifies the message first; falls
+    # back to regex if the model is unavailable. PolicyEngine still gates the chosen
+    # model (tier/quota/permission) and silently downgrades to the default if denied.
     # When web_search is disabled on the agent, intent routing must not select
     # the Perplexity model (web search is implicit in that model).
     if requested_model == "auto":
         from app.llm.router import PERPLEXITY_MODEL_CODE  # avoid circular at module level
-        intent_model = await classify_intent(user_content) or LOCAL_MODEL_CODE
+        intent_model = await classify_intent(user_content) or DEFAULT_MODEL_CODE
         if not web_search_enabled and intent_model == PERPLEXITY_MODEL_CODE:
-            intent_model = LOCAL_MODEL_CODE
+            intent_model = DEFAULT_MODEL_CODE
         requested = intent_model
     else:
         requested = requested_model

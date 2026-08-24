@@ -20,7 +20,7 @@ from app.agents.orchestrator import (
     run_chat_stream,
 )
 from app.llm.base import ChatChunk
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 
 _TEST_KEY = base64.b64encode(secrets.token_bytes(32)).decode()
 
@@ -72,7 +72,7 @@ async def test_emit_start_puts_start_event_in_queue(user_id, conv_id):
         "user_id": user_id,
         "resolved_conversation_id": conv_id,
         "user_content": "hello",
-        "model_code": LOCAL_MODEL_CODE,
+        "model_code": DEFAULT_MODEL_CODE,
         "chunk_queue": queue,
         "downgrade_to_local": False,
         "reasons": [],
@@ -84,7 +84,7 @@ async def test_emit_start_puts_start_event_in_queue(user_id, conv_id):
     parsed = json.loads(queue.get_nowait())
     assert parsed["type"] == "start"
     assert parsed["conversation_id"] == str(conv_id)
-    assert parsed["model"] == LOCAL_MODEL_CODE
+    assert parsed["model"] == DEFAULT_MODEL_CODE
 
 
 @pytest.mark.asyncio
@@ -97,7 +97,7 @@ async def test_emit_start_puts_downgrade_notice_when_flagged(user_id, conv_id):
         "user_id": user_id,
         "resolved_conversation_id": conv_id,
         "user_content": "hello",
-        "model_code": LOCAL_MODEL_CODE,
+        "model_code": DEFAULT_MODEL_CODE,
         "chunk_queue": queue,
         "downgrade_to_local": True,
         "reasons": ["tier_blocks_external"],
@@ -140,7 +140,7 @@ async def test_call_llm_adds_two_encrypted_messages(mock_session, user_id, conv_
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -174,7 +174,7 @@ async def test_call_llm_content_is_encrypted_not_plaintext(mock_session, user_id
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "secret question",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -213,7 +213,7 @@ async def test_call_llm_puts_chunks_and_done_in_queue(mock_session, user_id, con
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "test",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -249,7 +249,7 @@ async def test_run_chat_stream_yields_formatted_sse(mock_session, user_id, conv_
 
     async def fake_graph_safe(state: ChatState) -> None:
         q = state["chunk_queue"]
-        await q.put(f'{{"type":"start","conversation_id":"{conv_id}","model":"{LOCAL_MODEL_CODE}"}}')
+        await q.put(f'{{"type":"start","conversation_id":"{conv_id}","model":"{DEFAULT_MODEL_CODE}"}}')
         await q.put('{"type":"content","delta":"Hi"}')
         await q.put('{"type":"done","tokens_input":5,"tokens_output":1}')
         await q.put(None)
@@ -262,7 +262,7 @@ async def test_run_chat_stream_yields_formatted_sse(mock_session, user_id, conv_
             user=MagicMock(),
             resolved_conversation_id=conv_id,
             user_content="hello",
-            model_code=LOCAL_MODEL_CODE,
+            model_code=DEFAULT_MODEL_CODE,
             history=[],
         ):
             events.append(line)
@@ -399,7 +399,7 @@ async def test_external_call_consumes_quota(mock_session, user_id, conv_id):
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": "claude-sonnet-4",   # external — NOT LOCAL_MODEL_CODE
+            "model_code": "claude-sonnet-4",   # external — NOT DEFAULT_MODEL_CODE
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -413,9 +413,12 @@ async def test_external_call_consumes_quota(mock_session, user_id, conv_id):
            10 in args.args or args.kwargs.get("tokens_input") == 10
 
 
+@pytest.mark.parametrize("default_is_free, expect_consume", [(True, False), (False, True)])
 @pytest.mark.asyncio
-async def test_local_call_skips_quota(mock_session, user_id, conv_id):
-    """LOCAL_MODEL_CODE never calls quota_svc.consume() — local LLM is free."""
+async def test_default_model_billing_follows_provider(
+    mock_session, user_id, conv_id, default_is_free, expect_consume
+):
+    """D25: an on-prem default is free; a hosted (OpenAI) default consumes quota."""
     queue: asyncio.Queue = asyncio.Queue()
     mock_user = MagicMock()
     mock_user.id = user_id
@@ -428,7 +431,9 @@ async def test_local_call_skips_quota(mock_session, user_id, conv_id):
     mock_client.stream_chat = fake_stream
 
     with patch("app.agents.orchestrator.get_router") as mock_router, \
-         patch("app.agents.orchestrator.quota_svc") as mock_quota_svc:
+         patch("app.agents.orchestrator.quota_svc") as mock_quota_svc, \
+         patch("app.agents.orchestrator.default_model_is_free", return_value=default_is_free), \
+         patch("app.agents.orchestrator._compute_cost", new_callable=AsyncMock, return_value=0):
         mock_router.return_value.get.return_value = mock_client
         mock_quota_svc.consume = AsyncMock()
 
@@ -438,7 +443,7 @@ async def test_local_call_skips_quota(mock_session, user_id, conv_id):
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": LOCAL_MODEL_CODE,    # local — must NOT consume quota
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -446,7 +451,10 @@ async def test_local_call_skips_quota(mock_session, user_id, conv_id):
         }
         await call_llm(state)
 
-    mock_quota_svc.consume.assert_not_called()
+    if expect_consume:
+        mock_quota_svc.consume.assert_called_once()
+    else:
+        mock_quota_svc.consume.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +479,7 @@ async def test_call_n8n_node_emits_ack_and_fires_webhook(mock_session, user_id, 
         "user": mock_user,
         "resolved_conversation_id": conv_id,
         "user_content": "the server is down",
-        "model_code": LOCAL_MODEL_CODE,
+        "model_code": DEFAULT_MODEL_CODE,
         "chunk_queue": queue,
         "n8n_route": True,
     }
@@ -510,7 +518,7 @@ async def test_call_n8n_node_swallows_webhook_error(mock_session, user_id, conv_
         "user": mock_user,
         "resolved_conversation_id": conv_id,
         "user_content": "the server is down",
-        "model_code": LOCAL_MODEL_CODE,
+        "model_code": DEFAULT_MODEL_CODE,
         "chunk_queue": queue,
         "n8n_route": True,
     }
@@ -550,7 +558,7 @@ async def test_call_llm_prepends_alert_ack_in_persisted_message(mock_session, us
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "server is down",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -579,7 +587,7 @@ async def test_run_chat_stream_with_n8n_route_emits_ack_before_llm_content(mock_
 
     async def fake_graph_safe(state: ChatState) -> None:
         q = state["chunk_queue"]
-        await q.put(f'{{"type":"start","conversation_id":"{conv_id}","model":"{LOCAL_MODEL_CODE}"}}')
+        await q.put(f'{{"type":"start","conversation_id":"{conv_id}","model":"{DEFAULT_MODEL_CODE}"}}')
         await q.put(json.dumps({"type": "content", "delta": _ALERT_ACK}))
         await q.put('{"type":"content","delta":"LLM answer"}')
         await q.put('{"type":"done","tokens_input":5,"tokens_output":3}')
@@ -593,7 +601,7 @@ async def test_run_chat_stream_with_n8n_route_emits_ack_before_llm_content(mock_
             user=MagicMock(),
             resolved_conversation_id=conv_id,
             user_content="the server is down",
-            model_code=LOCAL_MODEL_CODE,
+            model_code=DEFAULT_MODEL_CODE,
             history=[],
             n8n_route=True,
         ):

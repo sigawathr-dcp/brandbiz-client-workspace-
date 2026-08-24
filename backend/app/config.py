@@ -25,12 +25,26 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     google_workspace_domain: str = ""
 
-    # LLM endpoints
+    # Default chat model — the model every "auto"/unspecified request, every
+    # helper call (intent classification, skill matching, prompt assistant)
+    # and every policy downgrade resolves to. D25: "openai" by default;
+    # "local" restores the pre-D25 Ollama/llama.cpp baseline below.
+    llm_default_provider: str = "openai"          # "openai" | "local"
+    llm_default_model: str = "gpt-5.4-mini-2026-03-17"
+    # Whether the default model accepts reasoning_effort (gpt-5.x family does).
+    llm_default_supports_reasoning: bool = True
+
+    # Local LLM endpoints — only used when llm_default_provider == "local".
     llm_primary_url: str = "http://llamacpp-primary:8080"
     llm_primary_model: str = "qwen2.5-14b-local"
+
+    # Embeddings (RAG / case matching). D25: OpenAI text-embedding-3-small
+    # (1536 dims — file_chunks.embedding is VECTOR(1536), migration 0066).
+    # "local" = BGE-M3 via Ollama; NOTE its 1024-dim vectors do not fit the
+    # 1536 column, so switching back also needs a schema migration.
+    llm_embed_provider: str = "openai"            # "openai" | "local"
+    llm_embed_model: str = "text-embedding-3-small"
     llm_embed_url: str = "http://llamacpp-embed:8081"
-    # Embedding model name (must match `ollama list` output on the embed server)
-    llm_embed_model: str = "bge-m3:latest"
 
     # How long Ollama keeps a model loaded in VRAM after a request (Ollama keep_alive param).
     # "0" = unload immediately (share VRAM across models on demand).

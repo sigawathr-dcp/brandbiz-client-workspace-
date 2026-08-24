@@ -24,7 +24,7 @@ import pytest
 import app.crypto as app_crypto
 from app.agents.orchestrator import ChatState, call_llm, emit_start
 from app.llm.base import ChatChunk
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.llm.tuning import GenerationTuning, ReasoningLevel, ResponseMode
 
 _TEST_KEY = base64.b64encode(secrets.token_bytes(32)).decode()
@@ -122,7 +122,7 @@ async def test_call_llm_passes_tuning_object_to_stream_chat(mock_session, user_i
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -160,7 +160,7 @@ async def test_call_llm_defaults_to_plain_tuning_when_state_omits_it(mock_sessio
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -191,7 +191,7 @@ async def test_message_sent_audit_includes_mode_and_reasoning(mock_session, user
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],
@@ -398,7 +398,7 @@ async def test_call_llm_no_reasoning_started_without_thinking_chunks(mock_sessio
             "user_id": user_id,
             "resolved_conversation_id": conv_id,
             "user_content": "hello",
-            "model_code": LOCAL_MODEL_CODE,
+            "model_code": DEFAULT_MODEL_CODE,
             "chunk_queue": queue,
             "downgrade_to_local": False,
             "reasons": [],

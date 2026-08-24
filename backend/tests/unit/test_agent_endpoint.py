@@ -126,16 +126,16 @@ async def test_agent_403_no_consent():
 @pytest.mark.asyncio
 async def test_agent_downgrade_still_returns_output():
     from app.routers.automations import agent, AgentRequest
-    from app.llm.router import LOCAL_MODEL_CODE
+    from app.llm.router import DEFAULT_MODEL_CODE
 
     user = _make_user()
     session = AsyncMock()
-    prepared = _make_prepared(model_code=LOCAL_MODEL_CODE, downgrade=True)
+    prepared = _make_prepared(model_code=DEFAULT_MODEL_CODE, downgrade=True)
     body = AgentRequest(content="เลขบัตรประชาชน 1234567890123")
 
     collect_result = {
         "output": "ขอโทษ ฉันไม่สามารถประมวลผลข้อมูลส่วนบุคคลได้",
-        "model_used": LOCAL_MODEL_CODE,
+        "model_used": DEFAULT_MODEL_CODE,
         "tokens_input": 20,
         "tokens_output": 15,
         "latency_ms": 800,
@@ -149,7 +149,7 @@ async def test_agent_downgrade_still_returns_output():
 
     # Response must still come back (downgrade ≠ deny)
     assert response.output != ""
-    assert response.model_used == LOCAL_MODEL_CODE
+    assert response.model_used == DEFAULT_MODEL_CODE
 
 
 # ---------------------------------------------------------------------------

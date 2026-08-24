@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.llm.tuning import ReasoningLevel, ResponseMode
 from app.services.chat_policy import prepare_chat
 
@@ -40,7 +40,7 @@ def _make_agent(capabilities: dict | None = None) -> MagicMock:
     return agent
 
 
-def _allowed_decision(model_code: str = LOCAL_MODEL_CODE):
+def _allowed_decision(model_code: str = DEFAULT_MODEL_CODE):
     from app.services.policy_engine import PolicyDecision
     return PolicyDecision(allowed=True, model_code=model_code, downgrade_to_local=False, reasons=[])
 
@@ -75,7 +75,7 @@ async def _run_prepare(
 
     with patch("app.services.chat_policy.PolicyEngine") as mock_pe, \
          patch("app.services.chat_policy.rag_search") as mock_rag, \
-         patch("app.services.chat_policy.classify_intent", new_callable=AsyncMock, return_value=LOCAL_MODEL_CODE), \
+         patch("app.services.chat_policy.classify_intent", new_callable=AsyncMock, return_value=DEFAULT_MODEL_CODE), \
          patch("app.services.chat_policy.settings") as mock_settings, \
          patch("app.services.chat_policy.alert") as mock_alert, \
          patch("app.services.chat_policy.agent_svc.get_agent", new_callable=AsyncMock, return_value=agent), \

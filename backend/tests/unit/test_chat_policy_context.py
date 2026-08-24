@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import app.services.classifier as classifier_module
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.services.chat_policy import (
     _HISTORY_LIMIT,
     _trim_to_char_budget,
@@ -103,7 +103,7 @@ async def test_extra_context_reaches_the_system_prompt():
         user=_make_user(),
         conversation_id=None,
         user_content="ทำไมงบเฟส 2 ถึงเท่านี้",
-        requested_model=LOCAL_MODEL_CODE,
+        requested_model=DEFAULT_MODEL_CODE,
         extra_context=plan_block,
     )
 
@@ -124,7 +124,7 @@ async def test_extra_context_is_classified_and_can_downgrade_the_turn():
     )
 
     assert prepared.downgrade_to_local is True
-    assert prepared.model_code == LOCAL_MODEL_CODE
+    assert prepared.model_code == DEFAULT_MODEL_CODE
 
 
 async def test_no_extra_context_leaves_the_system_prompt_untouched():
@@ -133,7 +133,7 @@ async def test_no_extra_context_leaves_the_system_prompt_untouched():
         user=_make_user(),
         conversation_id=None,
         user_content="สวัสดีครับ",
-        requested_model=LOCAL_MODEL_CODE,
+        requested_model=DEFAULT_MODEL_CODE,
     )
 
     assert prepared.system_prompt == ""

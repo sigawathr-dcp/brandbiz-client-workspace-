@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 import app.services.classifier as classifier_module
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.models.classification import DataTier
 from app.models.user import User
 from app.services.chat_policy import PreparedChat, prepare_chat
@@ -154,7 +154,7 @@ class TestThaiIDDowngrade:
         )
 
         # Policy decision
-        assert prepared.model_code == LOCAL_MODEL_CODE
+        assert prepared.model_code == DEFAULT_MODEL_CODE
         assert prepared.downgrade_to_local is True
 
         # audit.log() is now a direct async call (no Celery broker).
@@ -165,7 +165,7 @@ class TestThaiIDDowngrade:
         assert "tier_blocked" in actions, f"Expected tier_blocked, got {actions}"
 
         tier_blocked = next(c for c in calls if c["action"] == "tier_blocked")
-        assert tier_blocked["details"]["model_used"] == LOCAL_MODEL_CODE
+        assert tier_blocked["details"]["model_used"] == DEFAULT_MODEL_CODE
         assert tier_blocked["details"]["model_requested"] == "claude-sonnet-4"
         assert tier_blocked["user_id"] == user.id
 
@@ -193,7 +193,7 @@ class TestThaiIDDowngrade:
 
 class TestAutoModel:
     async def test_auto_model_stays_local(self):
-        """model='auto' resolves to LOCAL_MODEL_CODE before decide()."""
+        """model='auto' resolves to DEFAULT_MODEL_CODE before decide()."""
         user = _make_user("L1")
 
         conv_result = MagicMock()
@@ -217,7 +217,7 @@ class TestAutoModel:
             user_content="Hello!",
             requested_model="auto",
         )
-        assert prepared.model_code == LOCAL_MODEL_CODE
+        assert prepared.model_code == DEFAULT_MODEL_CODE
         assert prepared.downgrade_to_local is False
 
 
@@ -260,7 +260,7 @@ class TestDenyPath:
                 user=user,
                 conversation_id=None,
                 user_content="Project Apollo M&A target list",
-                requested_model=LOCAL_MODEL_CODE,
+                requested_model=DEFAULT_MODEL_CODE,
             )
         assert exc.value.status_code == 403
         assert exc.value.detail["error"] == "policy_denied"
@@ -303,7 +303,7 @@ class TestSSEDowngradeNotice:
                 user=MagicMock(),
                 resolved_conversation_id=conv_id,
                 user_content="My ID is 1-2345-67890-12-1",
-                model_code=LOCAL_MODEL_CODE,
+                model_code=DEFAULT_MODEL_CODE,
                 history=[],
                 downgrade_to_local=True,
                 reasons=["tier_blocks_external"],
@@ -327,7 +327,7 @@ class TestSSEDowngradeNotice:
 # n8n_route detection: prepare_chat sets the flag when URL is set + keyword matches
 # ---------------------------------------------------------------------------
 
-def _allowed_decision(model_code: str = LOCAL_MODEL_CODE):
+def _allowed_decision(model_code: str = DEFAULT_MODEL_CODE):
     """Build a minimal mock PolicyDecision that is allowed / no downgrade."""
     from app.services.policy_engine import PolicyDecision
     return PolicyDecision(
@@ -380,7 +380,7 @@ class TestN8nRouteDetection:
         session = _session_for_n8n_route()
         with patch("app.services.chat_policy.PolicyEngine") as mock_pe, \
              patch("app.services.chat_policy.rag_search") as mock_rag, \
-             patch("app.services.chat_policy.classify_intent", new_callable=AsyncMock, return_value=LOCAL_MODEL_CODE), \
+             patch("app.services.chat_policy.classify_intent", new_callable=AsyncMock, return_value=DEFAULT_MODEL_CODE), \
              patch("app.services.chat_policy.settings") as mock_settings, \
              patch("app.services.chat_policy.alert") as mock_alert:
             mock_pe.return_value.decide = AsyncMock(return_value=_allowed_decision())

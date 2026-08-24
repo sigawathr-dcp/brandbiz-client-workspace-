@@ -17,6 +17,31 @@ _REASONING_EFFORT: dict[ReasoningLevel, str] = {
 }
 
 
+def _translate_opts(opts: dict) -> dict:
+    """Map the Ollama-native kwargs helper callers pass into OpenAI params.
+
+    intent / skill_selector / prompt_assistant were written against the local
+    model and pass ``options={"num_predict": N}`` + ``keep_alive="5m"`` (see
+    LLMClient.stream_chat docstring). With D25 the default model is OpenAI, so:
+    ``num_predict`` -> ``max_completion_tokens``; ``keep_alive`` and any other
+    Ollama-only option are dropped (OpenAI rejects unknown params with a 400).
+    Everything else is passed through verbatim.
+    """
+    out: dict = {}
+    for key, value in opts.items():
+        if key == "keep_alive":
+            continue
+        if key == "options":
+            if isinstance(value, dict) and value.get("num_predict") is not None:
+                out["max_completion_tokens"] = int(value["num_predict"])
+            continue
+        if key == "max_tokens":
+            out["max_completion_tokens"] = value
+            continue
+        out[key] = value
+    return out
+
+
 class OpenAIClient(LLMClient):
     def __init__(self, api_key: str, model: str, *, supports_reasoning: bool = False) -> None:
         self._model = model
@@ -52,10 +77,12 @@ class OpenAIClient(LLMClient):
             kwargs["reasoning_effort"] = _REASONING_EFFORT[reasoning]
             # Reasoning models reject an explicit temperature — same drop
             # rule as Anthropic's extended thinking.
-        elif tuning.temperature is not None:
+        elif tuning.temperature is not None and not self._supports_reasoning:
+            # gpt-5.x reasoning-class models 400 on an explicit temperature
+            # even at reasoning_effort=none; only classic models get one.
             kwargs["temperature"] = tuning.temperature
 
-        kwargs.update(opts)
+        kwargs.update(_translate_opts(opts))
 
         try:
             finish_reason: str | None = None
@@ -114,8 +141,8 @@ class OpenAIClient(LLMClient):
         if temperature is not None:
             kwargs["temperature"] = temperature
         if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        kwargs.update({k: v for k, v in extra.items() if k not in ("model", "stream")})
+            kwargs["max_completion_tokens"] = max_tokens
+        kwargs.update(_translate_opts({k: v for k, v in extra.items() if k not in ("model", "stream")}))
 
         try:
             completion = await self._client.chat.completions.create(**kwargs)
@@ -152,8 +179,8 @@ class OpenAIClient(LLMClient):
         if temperature is not None:
             kwargs["temperature"] = temperature
         if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
-        kwargs.update({k: v for k, v in extra.items() if k not in ("model", "stream", "stream_options")})
+            kwargs["max_completion_tokens"] = max_tokens
+        kwargs.update(_translate_opts({k: v for k, v in extra.items() if k not in ("model", "stream", "stream_options")}))
 
         try:
             stream = await self._client.chat.completions.create(**kwargs)
@@ -164,6 +191,18 @@ class OpenAIClient(LLMClient):
             raise LLMProviderError(f"openai {exc.status_code}: {exc.message}") from exc
         except openai.APIConnectionError as exc:
             raise LLMProviderError(f"openai unreachable: {exc}") from exc
+
+    async def ping(self) -> bool:
+        """True if the API key is valid and the configured model is visible.
+
+        Used by the startup check and /health now that an OpenAI model can be
+        the default (D25). Never raises.
+        """
+        try:
+            await self._client.with_options(timeout=5.0).models.retrieve(self._model)
+            return True
+        except Exception:
+            return False
 
     async def generate_image(self, prompt: str, model: str = _DEFAULT_IMAGE_MODEL) -> bytes:
         """Generate an image using gpt-image-1. Returns raw PNG bytes."""

@@ -66,7 +66,7 @@ export interface ModelInfo {
 }
 
 export const MODEL_BY_CODE: Record<string, ModelInfo> = {
-  'auto':                   { label: 'Auto (local)',       provider: 'local',      isLocal: true,  free: true,  blurb: 'Routes to local model — always on, no external calls.' },
+  'auto':                   { label: 'Auto',               provider: 'openai',     isLocal: false, free: false, blurb: 'Routes by intent — default model (GPT-5.4 mini) unless a specialist fits.' },
   'qwen2.5-14b-local':      { label: 'Qwen 2.5 14B',       provider: 'local',      isLocal: true,  free: true,  blurb: 'Runs on our GPU. Free, private, always available.' },
   'claude-haiku-4-5':       { label: 'Claude Haiku 4.5',   provider: 'anthropic',  isLocal: false, free: false, blurb: 'Fast, lightweight Claude for quick tasks.' },
   'claude-sonnet-4':        { label: 'Claude Sonnet 4',    provider: 'anthropic',  isLocal: false, free: false, blurb: 'Balanced quality for everyday work.' },

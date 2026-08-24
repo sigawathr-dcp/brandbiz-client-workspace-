@@ -188,7 +188,7 @@ async def test_request_shape_matches_api_spec(mock_sdk):
     assert call_kwargs["stream"] is True
     assert call_kwargs["stream_options"] == {"include_usage": True}
     assert call_kwargs["temperature"] == 0.7
-    assert call_kwargs["max_tokens"] == 512
+    assert call_kwargs["max_completion_tokens"] == 512  # D25: max_tokens is translated for gpt-5.x
     assert call_kwargs["messages"] == [{"role": "user", "content": "Hello"}]
 
 

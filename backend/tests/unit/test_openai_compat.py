@@ -152,12 +152,12 @@ async def test_policy_deny_returns_openai_error_shape(_mock_deps):
 async def test_downgrade_uses_local_model(_mock_deps):
     """A tier downgrade routes to the local model and audits tier_blocked."""
     from app.routers.openai_compat import create_chat_completion, CompatRequest
-    from app.llm.router import LOCAL_MODEL_CODE
+    from app.llm.router import DEFAULT_MODEL_CODE
 
     user, session = _mock_deps
     decision = _make_decision(
         allowed=True,
-        model_code=LOCAL_MODEL_CODE,
+        model_code=DEFAULT_MODEL_CODE,
         downgrade=True,
         reasons=["tier_blocks_external"],
     )
@@ -202,8 +202,8 @@ async def test_downgrade_uses_local_model(_mock_deps):
                      for call in mock_audit.call_args_list]
     assert "tier_blocked" in audit_actions, f"Expected tier_blocked audit, got {audit_actions}"
 
-    # Client must be called with the local model (mock_router.get was called with LOCAL_MODEL_CODE)
-    mock_router.return_value.get.assert_called_with(LOCAL_MODEL_CODE)
+    # Client must be called with the local model (mock_router.get was called with DEFAULT_MODEL_CODE)
+    mock_router.return_value.get.assert_called_with(DEFAULT_MODEL_CODE)
 
 
 @pytest.mark.asyncio

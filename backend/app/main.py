@@ -78,16 +78,19 @@ async def lifespan(app: FastAPI):
             "Failed to load classifier rules at startup — defaulting to TIER_1_PUBLIC."
         )
 
-    # Ping the local model server at startup — non-fatal, mirrors the classifier pattern above.
+    # Ping the default model provider at startup — non-fatal, mirrors the classifier pattern above.
     try:
-        from app.llm.router import get_router, LOCAL_MODEL_CODE
-        reachable = await get_router().get(LOCAL_MODEL_CODE).ping()
+        from app.llm.router import get_router, DEFAULT_MODEL_CODE
+        reachable = await get_router().get(DEFAULT_MODEL_CODE).ping()
         if reachable:
-            _log.info("Local model OK at %s (model: %s)", settings.llm_primary_url, settings.llm_primary_model)
+            _log.info(
+                "Default model OK (provider: %s, model: %s)",
+                settings.llm_default_provider, DEFAULT_MODEL_CODE,
+            )
         else:
             _log.warning(
-                "Local model unreachable at %s — chat requests will fail until it is reachable.",
-                settings.llm_primary_url,
+                "Default model unreachable (provider: %s, model: %s) — chat requests will fail until it is.",
+                settings.llm_default_provider, DEFAULT_MODEL_CODE,
             )
     except Exception:
         _log.exception("Error pinging local model at startup.")
@@ -209,8 +212,8 @@ async def health() -> dict[str, str]:
 
     llm_status = "error"
     try:
-        from app.llm.router import get_router, LOCAL_MODEL_CODE
-        llm_status = "ok" if await get_router().get(LOCAL_MODEL_CODE).ping() else "error"
+        from app.llm.router import get_router, DEFAULT_MODEL_CODE
+        llm_status = "ok" if await get_router().get(DEFAULT_MODEL_CODE).ping() else "error"
     except Exception:
         pass
 

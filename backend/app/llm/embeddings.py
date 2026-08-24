@@ -1,21 +1,26 @@
-"""Embedding client for BGE-M3 served via Ollama's native /api/embed endpoint.
+"""Embedding clients for RAG / case matching.
 
-Uses the native endpoint instead of the OpenAI-compatible /v1/embeddings so
-that keep_alive is honoured reliably — the /v1/ shim does not forward it.
+D25: the default is OpenAI ``text-embedding-3-small`` (1536 dims —
+``file_chunks.embedding`` is VECTOR(1536) since migration 0066). The original
+BGE-M3-via-Ollama client is kept behind ``LLM_EMBED_PROVIDER=local`` but its
+1024-dim vectors need the column re-migrated before they can be stored.
 
 Usage::
 
     from app.llm.embeddings import get_embedder
 
     vecs = await get_embedder().embed(["hello", "world"])
-    # vecs: list[list[float]], each len 1024
+    # vecs: list[list[float]], each len EMBEDDING_DIMS
 """
 from __future__ import annotations
 
 import asyncio
 from functools import lru_cache
+from typing import Protocol
 
 import httpx
+
+EMBEDDING_DIMS = 1536
 
 _RETRY_BACKOFF = [0.5 * (i + 1) for i in range(10)]
 
@@ -24,8 +29,78 @@ class EmbeddingError(Exception):
     """Raised when the embedding server returns an error or is unreachable."""
 
 
+class Embedder(Protocol):
+    async def embed(self, texts: list[str]) -> list[list[float]]: ...
+    async def embed_one(self, text: str) -> list[float]: ...
+    async def ping(self) -> bool: ...
+
+
+class OpenAIEmbeddingClient:
+    """OpenAI /v1/embeddings client (default since D25).
+
+    Args:
+        api_key: OpenAI API key.
+        model: Embedding model id (``text-embedding-3-small`` -> 1536 dims).
+        read_timeout: Seconds to wait for the full response.
+        connect_retries: Connect-phase retries before giving up.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "text-embedding-3-small",
+        read_timeout: float = 60.0,
+        connect_retries: int = 3,
+    ) -> None:
+        import openai
+
+        self._model = model
+        self._connect_retries = max(connect_retries, 1)
+        self._client = openai.AsyncOpenAI(api_key=api_key, timeout=read_timeout)
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        import openai
+
+        last_exc: Exception | None = None
+        for attempt in range(self._connect_retries):
+            try:
+                response = await self._client.embeddings.create(model=self._model, input=texts)
+                # OpenAI returns items with an `index`; order defensively.
+                ordered = sorted(response.data, key=lambda d: d.index)
+                return [d.embedding for d in ordered]
+            except openai.APITimeoutError as exc:
+                raise EmbeddingError("Embedding server timed out.") from exc
+            except openai.APIConnectionError as exc:
+                last_exc = exc
+                if attempt < self._connect_retries - 1:
+                    await asyncio.sleep(_RETRY_BACKOFF[attempt])
+            except openai.APIStatusError as exc:
+                raise EmbeddingError(
+                    f"Embedding server returned {exc.status_code}: {exc.message}"
+                ) from exc
+
+        raise EmbeddingError(
+            f"Embedding server (openai) not reachable after {self._connect_retries} attempts."
+        ) from last_exc
+
+    async def embed_one(self, text: str) -> list[float]:
+        return (await self.embed([text]))[0]
+
+    async def ping(self) -> bool:
+        try:
+            await self._client.with_options(timeout=5.0).models.retrieve(self._model)
+            return True
+        except Exception:
+            return False
+
+
 class EmbeddingClient:
-    """Calls the Ollama /api/embed endpoint (native Ollama API).
+    """Calls the Ollama /api/embed endpoint (native Ollama API) — BGE-M3 path.
+
+    Uses the native endpoint instead of the OpenAI-compatible /v1/embeddings so
+    that keep_alive is honoured reliably — the /v1/ shim does not forward it.
 
     Args:
         base_url: Base URL of the Ollama server (e.g. ``http://host:11434``).
@@ -54,13 +129,7 @@ class EmbeddingClient:
         self._keep_alive = keep_alive
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        """Return a 1024-dim embedding vector for each input text.
-
-        Args:
-            texts: Non-empty list of strings to embed.
-
-        Returns:
-            Parallel list of float vectors in the same order as ``texts``.
+        """Return an embedding vector for each input text.
 
         Raises:
             EmbeddingError: On server error or connection failure.
@@ -128,11 +197,20 @@ class EmbeddingClient:
 
 
 @lru_cache
-def get_embedder() -> EmbeddingClient:
+def get_embedder() -> Embedder:
     """Return the process-singleton embedding client (built from settings)."""
     from app.config import get_settings
 
     cfg = get_settings()
+    if cfg.llm_embed_provider == "openai":
+        if not cfg.openai_api_key:
+            raise EmbeddingError("LLM_EMBED_PROVIDER=openai requires OPENAI_API_KEY to be set")
+        return OpenAIEmbeddingClient(
+            api_key=cfg.openai_api_key,
+            model=cfg.llm_embed_model,
+            read_timeout=cfg.llm_read_timeout,
+            connect_retries=cfg.llm_connect_retries,
+        )
     return EmbeddingClient(
         base_url=cfg.llm_embed_url,
         model=cfg.llm_embed_model,

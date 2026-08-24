@@ -24,7 +24,7 @@ from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.llm.router import LOCAL_MODEL_CODE
+from app.llm.router import DEFAULT_MODEL_CODE
 from app.models.audit import AuditLog
 from app.models.classification import DataTier
 from app.models.lead import Lead
@@ -273,7 +273,7 @@ async def test_demote_l4_to_l1_blocks_claude_immediately(db_engine_sync: str) ->
     assert DenyReason.ROLE_NOT_ALLOWED in decision_after.reasons, (
         f"Expected ROLE_NOT_ALLOWED in {decision_after.reasons}"
     )
-    assert decision_after.model_code == LOCAL_MODEL_CODE, (
+    assert decision_after.model_code == DEFAULT_MODEL_CODE, (
         "Downgrade must route to local model"
     )
 

@@ -8,7 +8,7 @@ apply now" —
   - matched: the local LLM judged the skill's description relevant to the
     message (best-effort; same graceful-fallback shape as app/tools/intent.py)
 
-Only the local model is used for matching (LOCAL_MODEL_CODE) — it is always
+Only the local model is used for matching (DEFAULT_MODEL_CODE) — it is always
 policy-allowed and free, so this adds no external call, quota, or policy
 concern (§7.2 untouched; the main chat call still goes through
 PolicyEngine.decide() separately).
@@ -56,7 +56,7 @@ async def match_skills_by_description(
         return []
 
     from app.llm.base import ChatMessage
-    from app.llm.router import LOCAL_MODEL_CODE, get_router
+    from app.llm.router import DEFAULT_MODEL_CODE, get_router
 
     listing = "\n".join(
         f"- {s.name}: {s.description or '(no description)'}" for s in candidates
@@ -64,7 +64,7 @@ async def match_skills_by_description(
     prompt = f"Skills:\n{listing}\n\nMessage: {user_content}"
 
     try:
-        client = get_router().get(LOCAL_MODEL_CODE)
+        client = get_router().get(DEFAULT_MODEL_CODE)
         raw = ""
         async for chunk in client.stream_chat(
             [
