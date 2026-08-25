@@ -1110,7 +1110,7 @@ _RESEARCH_CONTEXT_TEXT_CHARS = 300
 
 # Case match: capped at rag_top_k (config.py), i.e. the cards the client is
 # actually looking at. Summaries come from the scraped corpus and can run long,
-# so they are clipped harder than the rationale น้องภูมิ wrote.
+# so they are clipped harder than the rationale น้อง brandbiz wrote.
 _CASES_CONTEXT_MATCHES = 5
 _CASES_CONTEXT_SUMMARY_CHARS = 240
 _CASES_CONTEXT_RATIONALE_CHARS = 300
@@ -1156,7 +1156,7 @@ async def _intake_chat_context(session: AsyncSession, step1: EngagementStep) -> 
 
     lines = [
         "[CLIENT PROFILE — answers this client already gave in the intake interview]",
-        "These are established facts about this client, collected by น้องภูมิ in "
+        "These are established facts about this client, collected by น้อง brandbiz in "
         "this workspace. Use them when you answer. Never ask again for anything "
         "answered here; ask only about what is missing. Reply in Thai unless the "
         "client writes in another language.",
@@ -1181,7 +1181,7 @@ async def _research_chat_context(session: AsyncSession, step2: EngagementStep) -
     list is reproduced with them: a model that paraphrases a finding and keeps
     its marker has silently reattributed a claim to a source that does not make
     it. That is also why the header forbids adding findings — this block is the
-    whole of what น้องภูมิ can evidence about this market.
+    whole of what น้อง brandbiz can evidence about this market.
     """
     run = await _latest_research_run(session, step2.id)
     if run is None or run.status != "done":
@@ -1192,8 +1192,8 @@ async def _research_chat_context(session: AsyncSession, step2: EngagementStep) -
         return ""
 
     lines = [
-        "[MARKET SCAN — findings น้องภูมิ already showed this client]",
-        "น้องภูมิ ran this market scan for the client, and the client has read it "
+        "[MARKET SCAN — findings น้อง brandbiz already showed this client]",
+        "น้อง brandbiz ran this market scan for the client, and the client has read it "
         "in their workspace. Answer follow-up questions from these findings. "
         "Keep the [n] citation markers exactly as written, quote a finding "
         "rather than rephrasing what it claims, and never add a finding that is "
@@ -1213,7 +1213,7 @@ async def _cases_chat_context(session: AsyncSession, step3: EngagementStep) -> s
 
     `score` is handed over exactly as the card shows it (already rounded by
     _case_matches_for_run): a chat turn quoting a different figure than the
-    card next to it reads as น้องภูมิ contradicting itself, not as rounding.
+    card next to it reads as น้อง brandbiz contradicting itself, not as rounding.
 
     The header pins where the ranking came from — a bge-m3 + tag-model score
     over the case corpus (services/case_match.py), not the chat model's
@@ -1228,7 +1228,7 @@ async def _cases_chat_context(session: AsyncSession, step3: EngagementStep) -> s
 
     lines = [
         "[MATCHED CASE STUDIES — the cards this client is looking at]",
-        "น้องภูมิ matched these Brandbiz case studies to this client's profile, "
+        "น้อง brandbiz matched these Brandbiz case studies to this client's profile, "
         "ranked best first. The score is a similarity number produced by the "
         "matching engine, not your judgement: quote it exactly, explain a match "
         "from the rationale and the fields below, and never re-rank the cards or "

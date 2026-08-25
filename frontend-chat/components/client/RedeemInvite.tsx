@@ -106,7 +106,7 @@ export default function RedeemInvite({ token }: { token: string }) {
               Setting up your workspace…
             </h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0, lineHeight: 1.6 }}>
-              One moment — น้องภูมิ is getting ready.
+              One moment — น้อง brandbiz is getting ready.
             </p>
           </>
         )}

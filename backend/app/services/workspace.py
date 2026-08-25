@@ -568,7 +568,7 @@ async def _create_line_seat(
 # ---------------------------------------------------------------------------
 
 async def get_workspace_agent(session: AsyncSession, workspace_id: uuid.UUID) -> Agent | None:
-    """Return the client-facing Agent scoped to this workspace (the น้องภูมิ
+    """Return the client-facing Agent scoped to this workspace (the น้อง brandbiz
     persona) — the oldest published Agent row with
     agent.workspace_id == workspace_id. Deliberately not a new UI concept:
     an admin authors this Agent through the existing internal Agent form,
@@ -598,7 +598,7 @@ async def clone_template_agent(
     one it already serves. Each workspace owning its row also means an admin
     can tune one client's persona without touching every other client's.
 
-    agent_files rows are copied too — the น้องภูมิ template carries the case
+    agent_files rows are copied too — the น้อง brandbiz template carries the case
     library (21 files at time of writing) and a clone without them answers
     from nothing. Files themselves are not duplicated; both agents point at
     the same files.id rows, which is safe because agent_files is a pure

@@ -6,7 +6,7 @@
 ## Context
 
 D21/D22 (Phase 5) built a bounded, tenant-isolated client-facing surface: `/client/*` and the
-น้องภูมิ funnel. A client-workspace seat (`users.workspace_id` set) was walled off from the rest
+น้อง brandbiz funnel. A client-workspace seat (`users.workspace_id` set) was walled off from the rest
 of the gateway by two mechanisms — `require_internal` (403s any workspace-scoped user on ten
 internal routers, applied at `include_router()` level in `main.py`) and `workspace_visibility_filter`
 (narrows the "shared" read branch of `files`/`skills`/`agents` to same-tenant rows only).
@@ -64,7 +64,7 @@ They are recorded here so a future reader does not mistake them for oversights:
   indistinguishable from staff content for retention, `/reveal`, and audit-log purposes. Adding a
   column and a migration was judged out of proportion to this decision; revisit if retention policy
   ever needs to treat client content differently from staff content.
-- **A client seat's น้องภูมิ intake conversation surfaces in the internal `/chat` sidebar** once the
+- **A client seat's น้อง brandbiz intake conversation surfaces in the internal `/chat` sidebar** once the
   flag is on, and can be continued there — without the persona's system prompt, since that's
   injected by `/client/chat`, not `/chat`. Cosmetic, not a data leak (still the same user's own
   conversation).

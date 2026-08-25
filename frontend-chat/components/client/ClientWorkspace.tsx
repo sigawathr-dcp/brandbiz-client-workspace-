@@ -188,7 +188,7 @@ export default function ClientWorkspace() {
                     id: nextId(),
                     who: 'ai',
                     kind: 'text',
-                    text: `Welcome back — your profile is complete. Ask ${data.agent?.name ?? 'น้องภูมิ'} anything, or pick up where you left off.`,
+                    text: `Welcome back — your profile is complete. Ask ${data.agent?.name ?? 'น้อง brandbiz'} anything, or pick up where you left off.`,
                   },
                 ]
           if (data.research_status !== 'idle') {
@@ -803,7 +803,7 @@ export default function ClientWorkspace() {
 
   // Single fallback for the agent's display name/color — every other spot
   // that needs them reads from these two, never a separate hardcoded literal.
-  const agentName = agent?.name ?? 'น้องภูมิ'
+  const agentName = agent?.name ?? 'น้อง brandbiz'
   const agentColor = agent?.avatar_color ?? 'var(--accent)'
   const agentInitial = agentName.trim().slice(0, 1).toUpperCase()
   const activePlan = plans.find((p) => p.id === activePlanId) ?? null

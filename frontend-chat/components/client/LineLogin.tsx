@@ -206,7 +206,7 @@ export default function LineLogin({ liffId }: { liffId: string }) {
               {status === 'booting' ? 'Connecting to LINE…' : 'Setting up your workspace…'}
             </h1>
             <p style={{ fontSize: 13, color: 'var(--ink-3)', margin: 0, lineHeight: 1.6 }}>
-              One moment — น้องภูมิ is getting ready.
+              One moment — น้อง brandbiz is getting ready.
             </p>
           </>
         )}

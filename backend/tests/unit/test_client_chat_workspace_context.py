@@ -6,7 +6,7 @@ message thread — the interview is intake_answers rows (services/client_intake.
 runs it as a deterministic DB flow, not as LLM turns), the market scan is
 research_findings, the case match is case_matches. chat_policy.
 load_history_messages() only ever reads `messages`, so none of it reached the
-model: the chat re-asked what น้องภูมิ had already collected, and "ทำไมถึงเลือก
+model: the chat re-asked what น้อง brandbiz had already collected, and "ทำไมถึงเลือก
 เคสนี้ให้" hit a model that had never seen the cards on the client's screen.
 
 DB-free — the same mocked-session style as test_client_chat_plan_context.py.

@@ -143,7 +143,7 @@ export default function NavSidebar({ user, children }: NavSidebarProps) {
       </div>
 
       {/* D23 — client-workspace seat using the internal app: a way back to
-          the น้องภูมิ funnel it started from. Internal staff have no
+          the น้อง brandbiz funnel it started from. Internal staff have no
           workspace_id, so this never renders for them. */}
       {user?.workspace_id && (
         <div style={{ padding: '0 10px 8px', flexShrink: 0 }}>

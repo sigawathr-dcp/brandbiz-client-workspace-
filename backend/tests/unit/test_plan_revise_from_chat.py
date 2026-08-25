@@ -191,7 +191,7 @@ async def test_revision_appends_task_mode_after_agent_instructions():
     """The agent's chat voice ("ถามทีละคำถาม") would otherwise have it ask a
     follow-up question instead of emitting JSON."""
     collect = AsyncMock(return_value=_model_reply())
-    agent_voice = "คุณคือ น้องภูมิ ... ถามทีละคำถาม"
+    agent_voice = "คุณคือ น้อง brandbiz ... ถามทีละคำถาม"
 
     await _revise(collect=collect, prepared=_prepared(system_prompt=agent_voice))
 

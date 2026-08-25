@@ -181,7 +181,7 @@ async def test_cap_can_be_lifted_by_configuration(db_session: AsyncSession):
 
 
 async def _template_agent(session: AsyncSession, *, n_files: int = 2):
-    """An internally-authored, published agent standing in for น้องภูมิ,
+    """An internally-authored, published agent standing in for น้อง brandbiz,
     with knowledge files attached."""
     author = User(
         google_email=f"staff-{uuid.uuid4().hex}@example.com",
@@ -193,9 +193,9 @@ async def _template_agent(session: AsyncSession, *, n_files: int = 2):
 
     agent = Agent(
         user_id=author.id,
-        name="น้องภูมิ",
+        name="น้อง brandbiz",
         description="Brand consultant",
-        instructions="คุณคือ น้องภูมิ ... ถามทีละคำถาม",
+        instructions="คุณคือ น้อง brandbiz ... ถามทีละคำถาม",
         provider="anthropic",
         model="claude-sonnet-4",
         capabilities={"web_search": True},

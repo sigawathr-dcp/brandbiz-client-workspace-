@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     # restore the pre-0063 behavior (engagement.py::start_new, seq 2, 3, ...).
     client_single_engagement: bool = True
 
-    # The Agent row cloned into every self-serve workspace as its น้องภูมิ
+    # The Agent row cloned into every self-serve workspace as its น้อง brandbiz
     # persona. agents.workspace_id is single-valued, so a workspace cannot
     # share another's agent — workspace_svc.assign_agent() *moves* the row.
     # The invite flow papered over this with a manual admin assignment after

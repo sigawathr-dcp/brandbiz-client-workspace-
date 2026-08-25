@@ -166,7 +166,7 @@ async def assign_agent(
 ) -> None:
     """Scope an existing internally-authored Agent (built via the normal
     /agent/create UI) to this client workspace — it becomes the workspace's
-    น้องภูมิ persona, reachable via GET /client/bootstrap. No separate
+    น้อง brandbiz persona, reachable via GET /client/bootstrap. No separate
     "client agent" authoring flow exists."""
     await workspace_svc.assign_agent(
         session, workspace_id=workspace_id, agent_id=body.agent_id, admin_id=admin.id
@@ -179,7 +179,7 @@ async def get_workspace_agent_config(
     admin: Annotated[User, Depends(require_admin)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    """Read-only view backing the design's "Internal mode -> น้องภูมิ agent"
+    """Read-only view backing the design's "Internal mode -> น้อง brandbiz agent"
     screen — everything here is authored in the existing internal UI
     (agent form, skills, knowledge attachment); no new authoring surface.
     Returns null fields when no agent is assigned yet."""

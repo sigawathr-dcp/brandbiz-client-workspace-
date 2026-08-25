@@ -3,7 +3,7 @@
 ## Context
 
 `brandbiz_ecosystem_and_workflow.md` (untracked, added 2026-07-27) describes a **client-facing**
-Brandbiz workspace: a 5-step demo funnel (login → chat with "น้องภูมิ" → gather company info →
+Brandbiz workspace: a 5-step demo funnel (login → chat with "น้อง brandbiz" → gather company info →
 pull external market data via IAG → match against Brandbiz case studies → present a plan with
 budget estimate → CTA handoff to a human expert). Its action items are narrow: record a demo video
 and add a CTA button for an upcoming event.
@@ -34,7 +34,7 @@ isolation is genuinely new.
 
 ## Step-by-step mapping
 
-### Step 1 — Login & chat with น้องภูมิ
+### Step 1 — Login & chat with น้อง brandbiz
 
 **Exists:**
 - Login page `frontend-chat/app/login`, NextAuth Google OAuth + username/password
@@ -42,7 +42,7 @@ isolation is genuinely new.
 - Chat UI `frontend-chat/app/chat/[id]` with SSE streaming.
 - **The persona is a data row, not code.** `backend/app/models/agent.py` gives an Agent a `name`,
   `instructions` (system prompt), `model`, `capabilities` (`web_search`, `image_gen`, …),
-  `creativity_level`, `avatar_color`, `category`. "น้องภูมิ" = one Agent created via
+  `creativity_level`, `avatar_color`, `category`. "น้อง brandbiz" = one Agent created via
   `frontend-chat/app/agent/create`.
 
 **Missing:**
@@ -92,7 +92,7 @@ for a real research pipeline + structured profile extraction.
 - Attaching knowledge files to an Agent (`agent_files`) narrows retrieval to just those files
   (`chat_policy.py:197-201`) — exactly the "score this brand against our case library" shape.
 
-So: upload the case studies, attach them to the ภูมิ Agent, done. **Zero code.**
+So: upload the case studies, attach them to the brandbiz Agent, done. **Zero code.**
 
 **Missing — and this is the sharpest technical gap:**
 - Scope is binary: `personal` (owner only) or `org` (**any authenticated user**)
@@ -182,7 +182,7 @@ the markdown). Product — **medium**; the plan-as-artifact is genuinely new.
 
 Treat these as two separate tracks, and do not let the demo imply the product exists.
 
-- **Demo track (matches the document's own action items).** Seed a client user, build the ภูมิ Agent,
+- **Demo track (matches the document's own action items).** Seed a client user, build the brandbiz Agent,
   author 2–3 Skills (intake interview, plan-output template, budget format), upload case studies +
   rate card as knowledge files attached to that Agent, enable `web_search`. Record it. The only real
   code is the CTA button. Watch the L1 image-gen block if the infographic is in the video.

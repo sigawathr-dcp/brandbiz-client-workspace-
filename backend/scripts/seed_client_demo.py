@@ -10,7 +10,7 @@ Creates everything needed to click through the funnel once at an event:
      replace the numbers below with Brandbiz's actual sanitized rate card
      before the event; these are placeholders shaped like the design mockup's
      line items, not real prices.
-  4. A น้องภูมิ Agent, scoped to the workspace via assign_agent() (forces
+  4. A น้อง brandbiz Agent, scoped to the workspace via assign_agent() (forces
      visibility="public" so client seats can see it).
   5. One invite, printed as a ready-to-use /try/<token> link.
 
@@ -163,12 +163,12 @@ async def _get_or_create_agent(session, admin: User, workspace):
     agent = await create_agent(
         session=session,
         user=admin,
-        name="น้องภูมิ",
+        name="น้อง brandbiz",
         provider="local",
         model=LOCAL_MODEL_CODE,  # upgrade via /agent/{id}/edit for real plan-drafting quality
         description="Brandbiz brand strategist — client-facing intake, research, and plan drafting.",
         instructions=(
-            'คุณคือ "น้องภูมิ" ที่ปรึกษาแบรนด์ของ Brandbiz พูดจาสุภาพ เป็นกันเอง ถามทีละคำถาม\n'
+            'คุณคือ "น้อง brandbiz" ที่ปรึกษาแบรนด์ของ Brandbiz พูดจาสุภาพ เป็นกันเอง ถามทีละคำถาม\n'
             "ห้ามเดาราคา — ใช้เฉพาะตัวเลขจาก rate card ที่แนบมาเท่านั้น "
             "งานที่ไม่มีแถวใน rate card ให้บอกว่าต้องให้ผู้เชี่ยวชาญประเมินราคา"
         ),

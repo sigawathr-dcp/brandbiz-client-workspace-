@@ -16,7 +16,7 @@ types it as free text via the "อื่นๆ" row IntakeChips renders under ev
 question. There is no Skip: the option card is the only way to answer a
 step, and ClientWorkspace keeps the composer locked while it is up.
 
-Each INTAKE_SCRIPT entry is one turn: `question` is shown as น้องภูมิ's
+Each INTAKE_SCRIPT entry is one turn: `question` is shown as น้อง brandbiz's
 message, `options` become the numbered chips (1-N keyboard shortcut, "Skip"
 falls through to free text) rendered by components/client/IntakeChips.tsx.
 Answering with a chip records `option["value"]`; free text is stored
@@ -26,7 +26,7 @@ ahead of the field it was about to collect); this module un-shifts that so
 `INTAKE_SCRIPT[i]` is self-contained: its own question, its own options, its
 own field.
 
-`insight` is what น้องภูมิ concluded from THIS step's answer — surfaced by
+`insight` is what น้อง brandbiz concluded from THIS step's answer — surfaced by
 the frontend as an "insight earned" callout on the turn carrying the NEXT
 question (see app/routers/client.py::answer_intake, which returns
 `step_at(profile.step)["insight"]` before incrementing `profile.step`).
@@ -126,7 +126,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
         "field": "industry",
         "multi_select": True,
         "question": (
-            "สวัสดีครับ ผมน้องภูมิ ที่ปรึกษาแบรนด์ของ Brandbiz ครับ 🙂\n"
+            "สวัสดีครับ ผมน้อง brandbiz ที่ปรึกษาแบรนด์ของ Brandbiz ครับ 🙂\n"
             "ผมจะถามเรื่องธุรกิจของคุณ 9 ข้อ แล้วไปหาข้อมูลตลาดมาให้ "
             "ก่อนจะร่างแผนพร้อมประมาณงบให้ครับ\n\n"
             "ข้อแรก — ธุรกิจของคุณอยู่ในกลุ่มไหนครับ?"
@@ -142,7 +142,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
             {"label": "B2B / Service", "value": "B2B / service", "tag": "b2b_service"},
             {"label": "Property / Travel / Hospitality", "value": "Property / travel / hospitality", "tag": "property_travel"},
         ],
-        "insight": "รู้กลุ่มธุรกิจแล้วครับ — น้องภูมิ จะเทียบเคสจากไลบรารีในหมวดเดียวกันและหมวดใกล้เคียงก่อน แทนที่จะเดาแบบกว้าง ๆ",
+        "insight": "รู้กลุ่มธุรกิจแล้วครับ — น้อง brandbiz จะเทียบเคสจากไลบรารีในหมวดเดียวกันและหมวดใกล้เคียงก่อน แทนที่จะเดาแบบกว้าง ๆ",
         "match_tag": "industry",
         "weight": 0.25,
         "use_mode": "match",
@@ -179,7 +179,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
             {"label": "นักท่องเที่ยว / ตลาดต่างประเทศ", "value": "Tourists / overseas markets", "tag": "tourist_overseas"},
             {"label": "Mass Market / หลายกลุ่ม", "value": "Mass market / multiple segments", "tag": "mass_market"},
         ],
-        "insight": "รู้กลุ่มเป้าหมายแล้ว — ข้อมูลตลาดที่น้องภูมิ จะไปค้นต่อจะกรองเฉพาะพฤติกรรมของคนกลุ่มนี้ ไม่ใช่ภาพรวมทั้งตลาด",
+        "insight": "รู้กลุ่มเป้าหมายแล้ว — ข้อมูลตลาดที่น้อง brandbiz จะไปค้นต่อจะกรองเฉพาะพฤติกรรมของคนกลุ่มนี้ ไม่ใช่ภาพรวมทั้งตลาด",
         "match_tag": "audience",
         "weight": 0.10,
         "use_mode": "match",
@@ -220,7 +220,7 @@ INTAKE_SCRIPT: list[IntakeStep] = [
             {"label": "ยังไม่มีช่องทางขายของตัวเอง", "value": "No owned sales channel yet", "tag": "no_owned_channel"},
             {"label": "ไม่เกี่ยวข้องกับธุรกิจของฉัน", "value": "Not applicable to my business", "tag": "not_applicable"},
         ],
-        "insight": "ข้อนี้สำคัญกับกำไรระยะยาวครับ — ยิ่งยอดขายพึ่งแพลตฟอร์มภายนอกมาก ค่า GP ก็ยิ่งกินมาร์จิ้นไปเรื่อย ๆ น้องภูมิ จะดูให้ว่าควรเสนอช่องทางขายของแบรนด์เองควบคู่ไปด้วยไหม",
+        "insight": "ข้อนี้สำคัญกับกำไรระยะยาวครับ — ยิ่งยอดขายพึ่งแพลตฟอร์มภายนอกมาก ค่า GP ก็ยิ่งกินมาร์จิ้นไปเรื่อย ๆ น้อง brandbiz จะดูให้ว่าควรเสนอช่องทางขายของแบรนด์เองควบคู่ไปด้วยไหม",
         "match_tag": "own_commerce",
         "weight": None,
         "use_mode": "solution_trigger",

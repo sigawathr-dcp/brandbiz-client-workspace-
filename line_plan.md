@@ -27,7 +27,7 @@ No new dependencies on the backend: `httpx` and `python-jose[cryptography]` are 
 ## Context
 
 The client workspace (`/w`, `/w/plans`, `/p/<token>`) is a client-facing funnel: an AI
-persona (น้องภูมิ) runs a deterministic intake, pulls live market research, matches the case
+persona (น้อง brandbiz) runs a deterministic intake, pulls live market research, matches the case
 library, and drafts a costed plan handed to a human expert (PLAN.md Phase 5, D21–D23).
 
 Distribution today is a hand-minted single-use `/try/<token>` link. Putting the funnel

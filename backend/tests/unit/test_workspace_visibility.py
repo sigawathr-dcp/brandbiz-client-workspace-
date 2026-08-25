@@ -133,7 +133,7 @@ class TestSkillAccessibleFilterIsWorkspaceGated:
 class TestAgentAccessibleFilterIsWorkspaceGated:
     @pytest.mark.parametrize("flag_state", ["flag_off", "flag_on"])
     def test_public_branch_references_workspace_id(self, flag_state, request):
-        """Same regression guard as skills, for agents (e.g. the น้องภูมิ
+        """Same regression guard as skills, for agents (e.g. the น้อง brandbiz
         persona must not be visible to a different client's seats, or to
         internal staff outside its own workspace). Holds under both D23
         states."""

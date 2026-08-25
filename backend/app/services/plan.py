@@ -297,7 +297,7 @@ async def draft_plan(
         # adapters never echo the prompt back into it (§7.1).
         _logger.warning("draft_plan: provider failed (workspace=%s): %s", workspace_id, exc)
         raise HTTPException(
-            status_code=502, detail="น้องภูมิ could not draft a plan just now — please try again."
+            status_code=502, detail="น้อง brandbiz could not draft a plan just now — please try again."
         ) from exc
 
     try:
@@ -314,7 +314,7 @@ async def draft_plan(
             "{" in output,
         )
         raise HTTPException(
-            status_code=502, detail="น้องภูมิ could not draft a plan just now — please try again."
+            status_code=502, detail="น้อง brandbiz could not draft a plan just now — please try again."
         ) from exc
 
     budget_items = parsed.get("budget_items") or []
@@ -600,7 +600,7 @@ async def revise_from_instruction(
         )
         raise HTTPException(
             status_code=502,
-            detail="น้องภูมิ could not revise the plan just now — please try again.",
+            detail="น้อง brandbiz could not revise the plan just now — please try again.",
         ) from exc
 
     try:
@@ -618,7 +618,7 @@ async def revise_from_instruction(
         )
         raise HTTPException(
             status_code=502,
-            detail="น้องภูมิ could not revise the plan just now — please try again.",
+            detail="น้อง brandbiz could not revise the plan just now — please try again.",
         ) from exc
 
     budget = await rate_card_svc.price(session, workspace_id, parsed.get("budget_items") or [])

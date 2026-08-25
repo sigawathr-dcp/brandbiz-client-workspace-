@@ -49,7 +49,7 @@ class Agent(Base):
     # "public" | "personal"
     visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="public")
     # NULL = internal-shared agent (unchanged pre-D21/D22 behavior). Set = only
-    # visible to seats in that client workspace — e.g. the น้องภูมิ persona.
+    # visible to seats in that client workspace — e.g. the น้อง brandbiz persona.
     # Only meaningful with visibility="public"; ignored for "personal".
     # See app/services/workspace.py::workspace_visibility_filter.
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -1085,7 +1085,7 @@ Lower-priority but important:
 ### Phase 5 — Client Workspaces (D21/D22)
 
 A bounded, tenant-isolated client-facing surface: an outside prospect signs in, an AI persona
-(น้องภูมิ) runs a deterministic intake, pulls live market research, matches the company's case
+(น้อง brandbiz) runs a deterministic intake, pulls live market research, matches the company's case
 library, and drafts a costed plan handed off to a human expert. Built for a work event where
 outside people try it hands-on, and productized from there. See the implementation plan filed for
 "Client Workspaces — implementing `Brandbiz Workspace.dc.html`" for full design detail; this

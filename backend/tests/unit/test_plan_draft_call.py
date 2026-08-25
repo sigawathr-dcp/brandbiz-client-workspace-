@@ -134,7 +134,7 @@ async def test_drafting_call_sends_no_conversation_history():
 @pytest.mark.asyncio
 async def test_drafting_call_appends_task_mode_after_agent_instructions():
     collect = AsyncMock(return_value=_collect_result())
-    agent_voice = "คุณคือ น้องภูมิ ... ถามทีละคำถาม"
+    agent_voice = "คุณคือ น้อง brandbiz ... ถามทีละคำถาม"
 
     await _draft(_prepared(system_prompt=agent_voice), collect)
 

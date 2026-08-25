@@ -25,7 +25,7 @@ interface AgentConfig {
 }
 
 // Client Workspaces admin screen (Phase 5/6, D21/D22) — workspace detail:
-// mint invite links, and the read-only "น้องภูมิ agent" view the design
+// mint invite links, and the read-only "น้อง brandbiz agent" view the design
 // calls for. Everything shown here is authored in the existing internal
 // Agent/Skills/Knowledge UI — this page adds no new authoring surface, only
 // a way to see it scoped to one client and a way to assign an Agent to it.
@@ -127,7 +127,7 @@ export default function ClientDetailPage({ workspaceId }: { workspaceId: string 
 
       {/* Agent config (read-only) */}
       <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, padding: 18 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', marginBottom: 12 }}>น้องภูมิ agent</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)', marginBottom: 12 }}>น้อง brandbiz agent</div>
 
         {config?.agent ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
