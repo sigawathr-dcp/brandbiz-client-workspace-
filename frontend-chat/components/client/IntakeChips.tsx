@@ -106,8 +106,11 @@ export default function IntakeChips({
         overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px 11px' }}>
-        <div style={{ flex: 1, fontSize: 14, fontWeight: 600, letterSpacing: '-.01em', color: 'var(--ink)' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '13px 16px 11px' }}>
+        <div
+          className="client-chips-title"
+          style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, letterSpacing: '-.01em', color: 'var(--ink)' }}
+        >
           {title}
         </div>
         {multiSelect && (
@@ -116,50 +119,52 @@ export default function IntakeChips({
           </div>
         )}
       </div>
-      {chips.map((chip, i) => {
-        const isSelected = multiSelect && selected.has(chip.index)
-        return (
-          <button
-            key={chip.index}
-            disabled={disabled}
-            onClick={() => handleRow(chip)}
-            aria-pressed={multiSelect ? isSelected : undefined}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 13,
-              width: '100%',
-              textAlign: 'left',
-              background: isSelected ? 'var(--accent-weak)' : 'transparent',
-              border: 'none',
-              borderTop: '1px solid var(--line)',
-              padding: '11px 16px',
-              fontSize: 14,
-              color: isSelected ? 'var(--accent)' : 'var(--ink)',
-              cursor: disabled ? 'default' : 'pointer',
-              fontFamily: 'var(--font-sans)',
-            }}
-          >
-            <span
+      <div className="client-chips-list">
+        {chips.map((chip, i) => {
+          const isSelected = multiSelect && selected.has(chip.index)
+          return (
+            <button
+              key={chip.index}
+              disabled={disabled}
+              onClick={() => handleRow(chip)}
+              aria-pressed={multiSelect ? isSelected : undefined}
               style={{
-                width: 22,
-                height: 22,
-                flex: 'none',
-                borderRadius: 6,
-                background: isSelected ? 'var(--accent)' : 'var(--surface-2)',
-                color: isSelected ? '#fff' : 'var(--ink-3)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                display: 'grid',
-                placeItems: 'center',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 13,
+                width: '100%',
+                textAlign: 'left',
+                background: isSelected ? 'var(--accent-weak)' : 'transparent',
+                border: 'none',
+                borderTop: '1px solid var(--line)',
+                padding: '11px 16px',
+                fontSize: 14,
+                color: isSelected ? 'var(--accent)' : 'var(--ink)',
+                cursor: disabled ? 'default' : 'pointer',
+                fontFamily: 'var(--font-sans)',
               }}
             >
-              {isSelected ? <Ic.check size={12} strokeWidth={2} /> : i + 1}
-            </span>
-            <span style={{ flex: 1, lineHeight: 1.45 }}>{chip.label}</span>
-          </button>
-        )
-      })}
+              <span
+                style={{
+                  width: 22,
+                  height: 22,
+                  flex: 'none',
+                  borderRadius: 6,
+                  background: isSelected ? 'var(--accent)' : 'var(--surface-2)',
+                  color: isSelected ? '#fff' : 'var(--ink-3)',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  display: 'grid',
+                  placeItems: 'center',
+                }}
+              >
+                {isSelected ? <Ic.check size={12} strokeWidth={2} /> : i + 1}
+              </span>
+              <span style={{ flex: 1, lineHeight: 1.45 }}>{chip.label}</span>
+            </button>
+          )
+        })}
+      </div>
       {otherOpen ? (
         <div
           style={{

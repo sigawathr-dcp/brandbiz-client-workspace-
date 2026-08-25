@@ -429,6 +429,28 @@ tr:hover td { background: var(--surface-2); }
   padding: 12px 22px 18px;
 }
 
+/* The intake option card (components/client/IntakeChips.tsx) renders inside
+ * .client-composer-wrap, which is flex:none under a height:100dvh;
+ * overflow:hidden shell — so a 9-option question simply grew the block past
+ * the viewport on a phone and pushed the "อื่นๆ" row and the "ยืนยันคำตอบ"
+ * button off the bottom of the screen with nothing to scroll. Cap the option
+ * rows and let them scroll inside the card instead: the free-text row and
+ * the confirm button live outside this scroller, so they stay reachable no
+ * matter how many options a step has. */
+.client-chips-list {
+  max-height: min(46dvh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The card title repeats the question that is already the last chat turn, so
+ * on a phone it is clamped rather than allowed to eat the height the options
+ * need (the first step's greeting runs six lines at 430px wide). */
+.client-chips-title {
+  overflow-wrap: anywhere;
+}
+
 .client-grid {
   grid-template-columns: 212px 1fr 372px;
 }
@@ -641,6 +663,14 @@ tr:hover td { background: var(--surface-2); }
   .client-chat-progress { width: 96px; }
   .client-thread { padding: 18px 14px 0; gap: 16px; }
   .client-composer-wrap { padding: 10px 14px 14px; }
+  .client-chips-list { max-height: 38dvh; }
+  .client-chips-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+  }
   .client-chat-hint { display: none; }
 
   .client-grid {
