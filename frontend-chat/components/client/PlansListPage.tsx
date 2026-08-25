@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { money } from './budgetTable'
 import type { SavedPlan } from './types'
 
 // Client Workspaces (Phase 5, D21/D22) — "My plans" list. Each plan is a
@@ -102,9 +101,13 @@ export default function PlansListPage() {
                   )}
                 </div>
                 <div style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>{p.core_idea}</div>
-                {p.budget && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3)', fontFamily: 'var(--font-mono)' }}>
-                    {p.budget.currency} {money(p.budget.total)}
+                {/* No amount here: the plan surfaces show a percent split of
+                    the estimate, not prices, and a list card has no lines to
+                    split — a lone total would be the only price left in the
+                    product. */}
+                {p.budget && p.budget.lines.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-3)' }}>
+                    {p.budget.lines.length} budget line{p.budget.lines.length > 1 ? 's' : ''}
                   </div>
                 )}
               </a>

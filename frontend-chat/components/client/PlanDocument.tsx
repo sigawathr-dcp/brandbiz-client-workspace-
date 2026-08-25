@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import LeadModal from './LeadModal'
 import PlanRating from './PlanRating'
 import PlanSideRail from './PlanSideRail'
-import { money, moneyCol } from './budgetTable'
+import { moneyCol, percentShares } from './budgetTable'
 import type { PlanVersionBody, SavedPlan } from './types'
 
 // Client Workspaces (Phase 5, D21/D22) — the plan document view: 720px
@@ -79,7 +79,12 @@ export default function PlanDocument({ planId }: { planId: string }) {
   // version's fetch is still in flight or failed, rather than a blank paper.
   const showingVersion = isViewingOld && versionBody ? versionBody : plan
   const budget = showingVersion.budget
-  const agentName = plan.agent_name ?? 'น้องภูมิ'
+  const agentName = plan.agent_name ?? 'น้อง brandbiz'
+  // Share of the estimate per row (lines + contingency, in that order) —
+  // the paper shows the split, not the prices. See budgetTable.ts.
+  const shares = budget
+    ? percentShares([...budget.lines.map((l) => l.amount), budget.contingency], budget.total)
+    : []
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -197,24 +202,24 @@ export default function PlanDocument({ planId }: { planId: string }) {
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                   <tbody>
-                    {budget.lines.map((l) => (
+                    {budget.lines.map((l, i) => (
                       <tr key={l.code}>
                         <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-2)' }}>{l.label}</td>
                         <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-                          {money(l.amount)}
+                          {shares[i]}
                         </td>
                       </tr>
                     ))}
                     <tr>
                       <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-3)' }}>Contingency</td>
                       <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--ink-3)' }}>
-                        {money(budget.contingency)}
+                        {shares[budget.lines.length]}
                       </td>
                     </tr>
                     <tr>
                       <td style={{ padding: '12px 0 0', borderTop: '2px solid var(--ink)', fontWeight: 600, fontSize: 15 }}>Estimate</td>
                       <td style={{ ...moneyCol, padding: '12px 0 0 14px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15 }}>
-                        {budget.currency} {money(budget.total)}
+                        100%
                       </td>
                     </tr>
                   </tbody>

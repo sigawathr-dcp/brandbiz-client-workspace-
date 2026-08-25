@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { money, moneyCol } from './budgetTable'
+import { moneyCol, percentShares } from './budgetTable'
 
 interface SharedPlan {
   id: string
@@ -56,6 +56,11 @@ export default function SharedPlanView({ token }: { token: string }) {
   }
 
   const { budget } = plan
+  // Share of the estimate per row (lines + contingency, in that order) — a
+  // share link shows how the estimate splits, never the prices.
+  const shares = budget
+    ? percentShares([...budget.lines.map((l) => l.amount), budget.contingency], budget.total)
+    : []
 
   return (
     <div className="client-paper-wrap" style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -96,16 +101,25 @@ export default function SharedPlanView({ token }: { token: string }) {
                 <div style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--accent)', marginBottom: 10 }}>Budget</div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                   <tbody>
-                    {budget.lines.map((l) => (
+                    {budget.lines.map((l, i) => (
                       <tr key={l.code}>
                         <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-2)' }}>{l.label}</td>
-                        <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{money(l.amount)}</td>
+                        <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{shares[i]}</td>
                       </tr>
                     ))}
+                    {/* Contingency was never a row here while the column was
+                        money; as a percentage it has to be, or the shares
+                        stop at ~92% under a 100% total. */}
+                    <tr>
+                      <td style={{ padding: '9px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-3)' }}>Contingency</td>
+                      <td style={{ ...moneyCol, padding: '9px 0 9px 14px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--ink-3)' }}>
+                        {shares[budget.lines.length]}
+                      </td>
+                    </tr>
                     <tr>
                       <td style={{ padding: '12px 0 0', borderTop: '2px solid var(--ink)', fontWeight: 600, fontSize: 15 }}>Estimate</td>
                       <td style={{ ...moneyCol, padding: '12px 0 0 14px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 15 }}>
-                        {budget.currency} {money(budget.total)}
+                        100%
                       </td>
                     </tr>
                   </tbody>

@@ -1,7 +1,7 @@
 'use client'
 
 import type { DraftPlan, PlanDiff } from './types'
-import { money, moneyCol } from './budgetTable'
+import { moneyCol, percentDelta, percentShares } from './budgetTable'
 
 // Client Workspaces (Phase 5, D21/D22) — the 4-part draft plan card, inline
 // in the transcript. Every budget row's amount is computed server-side from
@@ -81,6 +81,9 @@ export default function PlanDraftCard({
   }
 
   const { budget } = plan
+  // The budget table shows each row's share of the estimate, not its price —
+  // lines + contingency, in that order, so the column sums to 100%.
+  const shares = percentShares([...budget.lines.map((l) => l.amount), budget.contingency], budget.total)
 
   return (
     <div style={{ marginTop: 14, border: '1px solid var(--line-2)', borderRadius: 12, background: 'var(--surface)', overflow: 'hidden' }}>
@@ -100,7 +103,7 @@ export default function PlanDraftCard({
           >
             <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginBottom: 4 }}>You asked for</div>
             <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--ink-2)' }}>{revision.note}</div>
-            <PlanChangeSummary diff={revision.diff} currency={plan.budget.currency} />
+            <PlanChangeSummary diff={revision.diff} />
           </div>
         )}
         <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: '-.01em', marginBottom: 12, color: 'var(--ink)' }}>{plan.title}</div>
@@ -137,29 +140,29 @@ export default function PlanDraftCard({
               <tr>
                 <th style={{ textAlign: 'left', fontSize: 10.5, fontWeight: 600, color: 'var(--ink-3)', padding: '0 0 7px' }}>Line item</th>
                 <th style={{ ...moneyCol, textAlign: 'right', fontSize: 10.5, fontWeight: 600, color: 'var(--ink-3)', padding: '0 0 7px 12px' }}>
-                  {budget.currency}
+                  Share
                 </th>
               </tr>
             </thead>
             <tbody>
-              {budget.lines.map((l) => (
+              {budget.lines.map((l, i) => (
                 <tr key={l.code}>
                   <td style={{ padding: '7px 0', borderTop: '1px solid var(--line-2)', color: 'var(--ink-2)' }}>{l.label}</td>
                   <td style={{ ...moneyCol, padding: '7px 0 7px 12px', borderTop: '1px solid var(--line-2)', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
-                    {money(l.amount)}
+                    {shares[i]}
                   </td>
                 </tr>
               ))}
               <tr>
                 <td style={{ padding: '7px 0', borderTop: '1px solid var(--line)', color: 'var(--ink-3)' }}>Contingency</td>
                 <td style={{ ...moneyCol, padding: '7px 0 7px 12px', borderTop: '1px solid var(--line)', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--ink-3)' }}>
-                  {money(budget.contingency)}
+                  {shares[budget.lines.length]}
                 </td>
               </tr>
               <tr>
                 <td style={{ padding: '9px 0 0', borderTop: '2px solid var(--ink)', fontWeight: 600 }}>Estimate</td>
                 <td style={{ ...moneyCol, padding: '9px 0 0 12px', borderTop: '2px solid var(--ink)', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                  {money(budget.total)}
+                  100%
                 </td>
               </tr>
             </tbody>
@@ -303,7 +306,7 @@ const _FIELD_LABELS: Record<string, string> = {
 // here so drift is visible rather than silent — and money is listed separately
 // from prose, because a reworded sentence is cosmetic and a changed budget
 // line is not.
-function PlanChangeSummary({ diff, currency }: { diff: PlanDiff; currency: string }) {
+function PlanChangeSummary({ diff }: { diff: PlanDiff }) {
   const { added, removed, qty_changed: qtyChanged, total_before: before, total_after: after } = diff.budget
   const budgetMoved = added.length > 0 || removed.length > 0 || qtyChanged.length > 0
   const narrative = diff.fields.map((f) => _FIELD_LABELS[f] ?? f)
@@ -325,13 +328,12 @@ function PlanChangeSummary({ diff, currency }: { diff: PlanDiff; currency: strin
       {added.map((l) => (
         <div key={`a-${l.code}`} style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
           + {l.label ?? l.code}
-          {l.amount ? ` · ${money(l.amount)} ${currency}` : ' · needs an expert quote'}
+          {l.amount ? '' : ' · needs an expert quote'}
         </div>
       ))}
       {removed.map((l) => (
         <div key={`r-${l.code}`} style={{ fontSize: 12.5, color: 'var(--ink-3)', textDecoration: 'line-through' }}>
           {l.label ?? l.code}
-          {l.amount ? ` · ${money(l.amount)} ${currency}` : ''}
         </div>
       ))}
       {qtyChanged.map((l) => (
@@ -341,7 +343,7 @@ function PlanChangeSummary({ diff, currency }: { diff: PlanDiff; currency: strin
       ))}
       {budgetMoved && before !== after && (
         <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>
-          Estimate {before ? money(before) : '—'} → {after ? money(after) : '—'} {currency}
+          Estimate {percentDelta(before, after) ?? 'changed'}
         </div>
       )}
     </div>
